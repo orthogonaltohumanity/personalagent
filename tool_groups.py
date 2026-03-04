@@ -28,7 +28,7 @@ TOOL_GROUPS = {
     },
     "file_operations": {
         "description": "Read and write files in the working directory",
-        "tools": ["read_file", "edit"]
+        "tools": ["read_file", "edit", "list_working_files"]
     },
     "code_generation": {
         "description": "Generate or edit code using AI code models",
