@@ -15,6 +15,9 @@ models:
 code_model: "qwen2.5-coder:7b"
 code_model_fallback: "qwen2.5-coder:7b"
 
+# Optional single-model chat mode
+chat_model: "qwen3.5:9b"
+
 # Embeddings
 embedding_model: "embeddinggemma"
 

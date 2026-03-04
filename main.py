@@ -4,7 +4,7 @@ import sys
 import time
 import threading
 
-from config import cfg, get_model, get_model_think
+from config import cfg, get_model, get_model_think, resolve_path
 from state import state
 from tools import build_tool_registry, available_functions, set_log_callback, set_input_callback, set_stream_callback
 from tool_groups import get_group_summary, get_tools_in_group, get_group_names, TOOL_GROUPS
@@ -41,8 +41,12 @@ def run_with_timeout(fn, timeout_seconds):
 
 
 def load_system_prompt():
-    with open(cfg['system_prompt_path'], 'r') as f:
-        return f.read()
+    system_prompt_path = resolve_path(cfg['system_prompt_path'])
+    try:
+        with open(system_prompt_path, 'r') as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 def parse_subtasks(text):
@@ -137,6 +141,45 @@ def detect_subtask_failure(results):
     return False, ""
 
 
+def build_retry_planning_input(user_task, failure_reason, all_results):
+    """Build a re-planning prompt after execution failure.
+
+    Avoid feeding raw tool-error payloads back into planning context. Raw
+    outputs (especially stack/error strings) can be echoed and repeatedly
+    poison first-subtask planning in subsequent loops.
+    """
+    summarized_results = []
+    for task_desc, results in all_results:
+        if not results:
+            continue
+        successful_calls = [
+            f"{fn}→{res[:100]}"
+            for fn, _, res in results
+            if not str(res).startswith("Error:")
+        ]
+        if successful_calls:
+            summarized_results.append(f"  {task_desc}: {', '.join(successful_calls)}")
+
+    # Keep only structured, high-level failure context.
+    # Expected format: Subtask N '...' failed: ...
+    subtask_match = re.search(r"Subtask\s+\d+\s+'([^']+)'", failure_reason)
+    failed_subtask = subtask_match.group(1).strip() if subtask_match else "(unknown subtask)"
+
+    tool_match = re.search(r"failed:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+failed", failure_reason)
+    failed_tool = tool_match.group(1).strip() if tool_match else "(unknown tool)"
+
+    retry_prompt = (
+        f"Original task: {user_task}\n\n"
+        f"Previous execution failed.\n"
+        f"Failed subtask: {failed_subtask}\n"
+        f"Likely failing tool: {failed_tool}\n\n"
+        f"Re-plan with a different approach. Do not repeat the same failing tool path unchanged."
+    )
+    if summarized_results:
+        retry_prompt += "\n\nUseful successful results so far:\n" + "\n".join(summarized_results)
+    return retry_prompt
+
+
 def build_planner_messages(system_prompt, planning_input):
     group_summary = get_group_summary(include_tools=False)
     return [
@@ -147,14 +190,40 @@ def build_planner_messages(system_prompt, planning_input):
             f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
             f"You do NOT call tools, write code, or perform tasks. A separate TOOL SELECTOR executes your plan.\n\n"
             f"RULES:\n"
-            f"- First subtask should always be a memory recall (search_memory for identity, goals, context)\n"
-            f"- Last subtask should save important info to memory when appropriate\n"
+            f"- First subtask should always be a memory recall (search_memory for identity, goals, context).\n"
+            f"- Include at least one dedicated memory-saving subtask near the end (save_memory) for durable findings, decisions, and outputs.\n"
+            f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
+            f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
             f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
+            f"- Prefer subtasks that naturally require multiple tool calls when evidence gathering + action are both needed.\n"
             f"- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
             f"{group_summary}"
         )},
         {'role': 'user', 'content': planning_input}
     ]
+
+
+def build_tool_executor_system_prompt(chosen_group):
+    """System prompt for tool execution, with writing-tool guidance."""
+    base = (
+        f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
+        f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
+        f"Use up to {cfg['max_tools_per_task']} tool calls. Prefer 2+ tool calls when they improve quality (e.g., retrieve then write/save). "
+        f"Use memory tools distinctly: search/open for recall, save for new durable knowledge, edit for corrections."
+    )
+
+    if chosen_group == 'text_generation':
+        writing_rules = (
+            "\n\nWRITING TOOL PRIORITY RULES (text_generation group):"
+            "\n- Use write_text for net-new writing when no source file is required."
+            "\n- Use write_text_from_source when writing must be based on an existing source/reference file."
+            "\n- Use edit_text only to revise an existing output file."
+            "\n- Prefer source-grounded writing over free-form writing when either can satisfy the subtask."
+            "\n- When practical, chain multiple calls (e.g., read_file -> write_text_from_source -> edit_text) for better quality."
+        )
+        return base + writing_rules
+
+    return base
 
 
 def build_selector_messages(subtask, all_results):
@@ -175,6 +244,11 @@ def build_selector_messages(subtask, all_results):
             f"You are a tool selector. Given a subtask, first pick the best tool group, "
             f"then call up to {cfg['max_tools_per_task']} tools from that group to accomplish the subtask.\n\n"
             f"Available groups:\n{group_list}\n\n"
+            f"Selection rules:\n"
+            f"- Choose text_generation for writing/editing tasks.\n"
+            f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
+            f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
+            f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
             f"Reply with the group name on the first line, then call the appropriate tools."
         )},
         {'role': 'user', 'content': "\n".join(context_parts)}
@@ -311,11 +385,7 @@ def main_tui():
 
                     def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
                         tool_messages = [
-                            {'role': 'system', 'content': (
-                                f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
-                                f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
-                                f"Use up to {cfg['max_tools_per_task']} tool calls."
-                            )},
+                            {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                             {'role': 'user', 'content': "\n".join(_context_parts)}
                         ]
                         _, _, tool_calls = query_ollama(
@@ -370,18 +440,15 @@ def main_tui():
                             break
                         if user_input.lower() in ('n', 'no', ''):
                             break
-                        planning_input = user_input if user_input.lower() not in ('y', 'yes') else failure_reason
+                        planning_input = (
+                            user_input
+                            if user_input.lower() not in ('y', 'yes')
+                            else build_retry_planning_input(user_task, failure_reason, all_results)
+                        )
                         verification_loops = 0
                     else:
                         tui.state.add_log(f"Execution failed — re-planning (loop {verification_loops + 1})")
-                        planning_input = (
-                            f"Original task: {user_task}\n\n"
-                            f"Execution failed during subtask execution:\n{failure_reason}\n\n"
-                            f"Results so far:\n" + "\n".join(
-                                f"  {t}: {', '.join(f'{fn}→{r[:100]}' for fn, _, r in res) if res else '(no results)'}"
-                                for t, res in all_results
-                            ) + "\n\nRe-plan to complete the task, working around the failure."
-                        )
+                        planning_input = build_retry_planning_input(user_task, failure_reason, all_results)
                     continue
 
                 # ── VERIFY PHASE ──────────────────────────────────────
@@ -522,10 +589,7 @@ def main_legacy():
 
                 def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
                     tool_messages = [
-                        {'role': 'system', 'content': (
-                            f"You are a tool executor. Call the appropriate tools to accomplish this subtask. "
-                            f"Use up to {cfg['max_tools_per_task']} tool calls."
-                        )},
+                        {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                         {'role': 'user', 'content': "\n".join(_context_parts)}
                     ]
                     _, _, tool_calls = query_ollama(
@@ -574,18 +638,15 @@ def main_legacy():
                         break
                     if user_input.lower() in ('n', 'no', ''):
                         break
-                    planning_input = user_input if user_input.lower() not in ('y', 'yes') else failure_reason
+                    planning_input = (
+                        user_input
+                        if user_input.lower() not in ('y', 'yes')
+                        else build_retry_planning_input(user_task, failure_reason, all_results)
+                    )
                     verification_loops = 0
                 else:
                     print(f"\n[Execution failed — re-planning (loop {verification_loops + 1})]")
-                    planning_input = (
-                        f"Original task: {user_task}\n\n"
-                        f"Execution failed during subtask execution:\n{failure_reason}\n\n"
-                        f"Results so far:\n" + "\n".join(
-                            f"  {t}: {', '.join(f'{fn}→{r[:100]}' for fn, _, r in res) if res else '(no results)'}"
-                            for t, res in all_results
-                        ) + "\n\nRe-plan to complete the task, working around the failure."
-                    )
+                    planning_input = build_retry_planning_input(user_task, failure_reason, all_results)
                 continue
 
             # VERIFY

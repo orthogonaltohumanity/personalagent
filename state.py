@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from config import cfg
+from config import cfg, resolve_path
 
 
 class State:
@@ -9,7 +9,8 @@ class State:
 
     def __init__(self):
         self.short_term_goal = cfg['short_term_goal']
-        self.working_directory = cfg['working_directory']
+        self.working_directory = str(resolve_path(cfg['working_directory']))
+        os.makedirs(self.working_directory, exist_ok=True)
         self.iteration_count = 0  # resets per user task
         self.pdf_index = self._load_pdf_index()
         self.memories = self._load_memories()
@@ -28,7 +29,7 @@ class State:
 
     def _load_memories(self):
         try:
-            with open(cfg['memories_path'], 'r') as f:
+            with open(resolve_path(cfg['memories_path']), 'r') as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
@@ -49,20 +50,25 @@ class State:
 
     def save_memories(self):
         """Force-save memories."""
-        with open(cfg['memories_path'], 'w') as f:
+        memories_path = resolve_path(cfg['memories_path'])
+        memories_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(memories_path, 'w') as f:
             json.dump(self.memories, f, indent=4)
         self._memories_dirty = False
 
     # ── PDF index ─────────────────────────────────────────────────────────
 
     def _load_pdf_index(self):
-        if os.path.exists(cfg['pdf_index_path']):
-            with open(cfg['pdf_index_path'], 'r') as f:
+        pdf_index_path = resolve_path(cfg['pdf_index_path'])
+        if os.path.exists(pdf_index_path):
+            with open(pdf_index_path, 'r') as f:
                 return json.load(f)
         return []
 
     def save_pdf_index(self):
-        with open(cfg['pdf_index_path'], 'w') as f:
+        pdf_index_path = resolve_path(cfg['pdf_index_path'])
+        pdf_index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(pdf_index_path, 'w') as f:
             json.dump(self.pdf_index, f)
 
 
