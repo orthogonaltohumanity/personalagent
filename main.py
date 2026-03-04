@@ -268,6 +268,7 @@ def build_retry_planning_input(user_task, failure_reason, all_results):
 def build_planner_messages(system_prompt, planning_input):
     group_summary = get_group_summary(include_tools=False)
     memory_context = get_planner_memory_context()
+<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
     default_planner_prompt = (
         f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
         f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
@@ -287,21 +288,41 @@ def build_planner_messages(system_prompt, planning_input):
         'max_subtasks': cfg['max_subtasks'],
         'group_summary': group_summary,
     })
+=======
+>>>>>>> main
     return [
         {'role': 'system', 'content': (
             f"{system_prompt}\n\n"
             f"WORKING DIRECTORY: {state.working_directory}\n"
             f"Short term goal: {state.short_term_goal}\n\n"
             f"Use this preloaded memory context when relevant:{memory_context}\n\n"
+<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
             f"{planner_prompt}"
+=======
+            f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
+            f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
+            f"RULES:\n"
+            f"- REQUIRED FORMAT: every subtask must start with a bracketed tool group tag followed by an action, e.g., '[web_search] Find ...'.\n- Use exact group tags from the list below; do not invent new group names.\n"
+            f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
+            f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
+            f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
+            f"- Prefer subtasks that naturally require multiple tool calls when evidence gathering + action are both needed.\n"
+            f"- If re-planning after a failure, use a diverse strategy rather than repeating the same approach.\n- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
+            f"{group_summary}"
+>>>>>>> main
         )},
         {'role': 'user', 'content': planning_input}
     ]
 
 
 def build_tool_executor_system_prompt(chosen_group):
+<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
     """System prompt for tool execution, configurable via prompt file."""
     default_tool_user_prompt = (
+=======
+    """System prompt for tool execution, with writing-tool guidance."""
+    base = (
+>>>>>>> main
         f"You are the tool user. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
         f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
         f"Use up to {cfg['max_tools_per_task']} tool calls. Prefer 2+ tool calls when they improve quality (e.g., retrieve then write/save). "
@@ -362,7 +383,20 @@ def build_selector_messages(subtask, all_results):
         'max_tools_per_task': cfg['max_tools_per_task'],
     })
     messages = [
+<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
         {'role': 'system', 'content': chooser_prompt},
+=======
+        {'role': 'system', 'content': (
+            f"You are a tool group chooser. Given a subtask, pick the best tool group based on the planner's subtask description and any recommended group.\n\n"
+            f"Available groups:\n{group_list}\n\n"
+            f"Selection rules:\n"
+            f"- Choose text_generation for writing/editing tasks.\n"
+            f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
+            f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
+            f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
+            f"Reply with ONLY one line in this exact format: [group_name]. Do not call tools and do not add any other text."
+        )},
+>>>>>>> main
         {'role': 'user', 'content': "\n".join(context_parts)}
     ]
     return messages, context_parts
