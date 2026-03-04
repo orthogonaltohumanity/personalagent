@@ -108,6 +108,19 @@ def _ensure_parent_dir(path: str):
         os.makedirs(parent, exist_ok=True)
 
 
+def _resolve_workdir_subpath(path: str = '.'):
+    """Resolve a path under the working directory and block path traversal."""
+    base = os.path.abspath(state.working_directory)
+    rel = path or '.'
+    candidate = os.path.abspath(os.path.join(base, rel))
+    try:
+        if os.path.commonpath([base, candidate]) != base:
+            raise ValueError('path escapes working directory')
+    except ValueError:
+        raise ValueError('path escapes working directory')
+    return candidate
+
+
 def _load_system_prompt_text():
     """Load system prompt from configured path, tolerant of missing files."""
     try:
@@ -471,6 +484,37 @@ def edit(file: str, append: bool, text: str):
         return f'{action} {file} ({len(text)} chars)'
     except Exception as e:
         return f"Error: {e}"
+
+
+def list_working_files(path: str = '.', recursive: bool = True):
+    '''Lists files in the Playground working directory or one of its subdirectories.
+    path is relative to the working directory. Set recursive=False for top-level only.'''
+    try:
+        root = _resolve_workdir_subpath(path)
+    except Exception as e:
+        return f"Error: {e}"
+
+    if not os.path.exists(root):
+        return f"Error: path '{path}' does not exist in {state.working_directory}"
+
+    files = []
+    base = os.path.abspath(state.working_directory)
+    if os.path.isfile(root):
+        files.append(os.path.relpath(root, base))
+    else:
+        if recursive:
+            for dirpath, _, filenames in os.walk(root):
+                for filename in filenames:
+                    full = os.path.join(dirpath, filename)
+                    files.append(os.path.relpath(full, base))
+        else:
+            for name in os.listdir(root):
+                full = os.path.join(root, name)
+                if os.path.isfile(full):
+                    files.append(os.path.relpath(full, base))
+
+    files.sort()
+    return files
 
 
 # ── Dynamic tool creation ────────────────────────────────────────────────────
@@ -1093,6 +1137,7 @@ def build_tool_registry():
         # Files
         'read_file': read_file,
         'edit': edit,
+        'list_working_files': list_working_files,
         # Code generation
         'generate_code': generate_code,
         'generate_code_edit': generate_code_edit,

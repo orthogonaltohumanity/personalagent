@@ -5,10 +5,10 @@ models:
     model: "qwen3.5:9b"
     think: true
   tool_group_chooser:
-    model: "qwen3:0.6b"
+    model: "qwen3:1.7b"
     think: false
   tool_user:
-    model: "qwen3:0.6"
+    model: "ministral-3:3b"
     think: false
   verifier:
     model: "qwen3:4b"

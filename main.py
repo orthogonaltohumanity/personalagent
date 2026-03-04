@@ -162,9 +162,8 @@ def detect_subtask_failure(results):
 def build_retry_planning_input(user_task, failure_reason, all_results):
     """Build a re-planning prompt after execution failure.
 
-    Avoid feeding raw tool-error payloads back into planning context. Raw
-    outputs (especially stack/error strings) can be echoed and repeatedly
-    poison first-subtask planning in subsequent loops.
+    Include the direct failure/error details and require strategy diversity on
+    retry so the planner does not repeat the same failing path.
     """
     summarized_results = []
     for task_desc, results in all_results:
@@ -186,13 +185,28 @@ def build_retry_planning_input(user_task, failure_reason, all_results):
     tool_match = re.search(r"failed:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+failed", failure_reason)
     failed_tool = tool_match.group(1).strip() if tool_match else "(unknown tool)"
 
+    raw_failure_lines = []
+    for task_desc, results in all_results:
+        if task_desc != failed_subtask:
+            continue
+        for fn, args, res in results:
+            raw_failure_lines.append(f"  {fn}({args}) -> {res}")
+
     retry_prompt = (
         f"Original task: {user_task}\n\n"
         f"Previous execution failed.\n"
         f"Failed subtask: {failed_subtask}\n"
-        f"Likely failing tool: {failed_tool}\n\n"
-        f"Re-plan with a different approach. Do not repeat the same failing tool path unchanged."
+        f"Likely failing tool: {failed_tool}\n"
+        f"Raw failure message: {failure_reason}\n\n"
+        f"Re-plan with strategy diversity. Try a meaningfully different method than the failed attempt, such as:\n"
+        f"- choose a different tool group,\n"
+        f"- change tool order or intermediate artifacts,\n"
+        f"- gather missing evidence before acting,\n"
+        f"- split the failed work into smaller safer subtasks.\n"
+        f"Do not repeat the same failing tool path unchanged."
     )
+    if raw_failure_lines:
+        retry_prompt += "\n\nDirect tool outputs from failed subtask (including errors):\n" + "\n".join(raw_failure_lines)
     if summarized_results:
         retry_prompt += "\n\nUseful successful results so far:\n" + "\n".join(summarized_results)
     return retry_prompt
@@ -208,14 +222,14 @@ def build_planner_messages(system_prompt, planning_input):
             f"Short term goal: {state.short_term_goal}\n\n"
             f"Use this preloaded memory context when relevant:{memory_context}\n\n"
             f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
-            f"You do NOT call tools, write code, or perform tasks. A separate TOOL SELECTOR executes your plan.\n\n"
+            f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
             f"RULES:\n"
             f"- Provide each subtask with a suggested tool group inline when possible (e.g., '[web_search] Find ...').\n"
             f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
             f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
             f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
             f"- Prefer subtasks that naturally require multiple tool calls when evidence gathering + action are both needed.\n"
-            f"- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
+            f"- If re-planning after a failure, use a diverse strategy rather than repeating the same approach.\n- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
             f"{group_summary}"
         )},
         {'role': 'user', 'content': planning_input}

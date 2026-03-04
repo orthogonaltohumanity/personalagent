@@ -45,8 +45,8 @@ downloads/           Downloaded PDFs and CSVs
 | Role | Default Model | Think | Purpose |
 |------|---------------|-------|---------|
 | planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list with suggested tool groups. |
-| tool_group_chooser | qwen3:0.6b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
-| tool_user | qwen3:0.6 | no | Calls up to 3 tools from the chosen group for each subtask. |
+| tool_group_chooser | qwen3:1.7b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
+| tool_user | ministral-3:3b | no | Calls up to 3 tools from the chosen group for each subtask. |
 | verifier | qwen3:4b | yes | Reviews original task + all results, responds COMPLETE or INCOMPLETE |
 
 Configured in `config.yaml` under `models:`. Each model entry has a `think` flag for chain-of-thought mode. The planner receives NO tool schemas — it produces text only. This avoids compatibility issues with models that can't reliably handle thinking + tool calling together.
@@ -111,7 +111,7 @@ Tools are organized into 9 groups. The tool selector picks ONE group per subtask
 | web_search | Search the web and download files | search_web, search_and_download_files |
 | social_media | Moltbook social media platform | 16 tools (posts, file-to-post, comments, votes, profiles, communities) |
 | document_processing | PDFs and CSVs | ingest_pdf, ingest_csv, query_documents, list_downloaded_files |
-| file_operations | Read/write files | read_file, edit |
+| file_operations | Read/write files | read_file, edit, list_working_files |
 | code_generation | AI code models | generate_code, generate_code_edit |
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
 | version_control | Git operations | git_init, git_status, git_add, git_commit, git_log, git_diff, git_diff_staged, git_branch, git_checkout, git_list_branches |
@@ -152,10 +152,10 @@ models:
     model: "qwen3.5:9b"
     think: true              # chain-of-thought mode (model must support it)
   tool_group_chooser:
-    model: "qwen3:0.6b"
+    model: "qwen3:1.7b"
     think: false
   tool_user:
-    model: "qwen3:0.6"
+    model: "ministral-3:3b"
     think: false
   verifier:
     model: "qwen3:4b"
