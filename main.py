@@ -196,6 +196,27 @@ def build_planner_messages(system_prompt, planning_input):
     ]
 
 
+def build_tool_executor_system_prompt(chosen_group):
+    """System prompt for tool execution, with writing-tool guidance."""
+    base = (
+        f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
+        f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
+        f"Use up to {cfg['max_tools_per_task']} tool calls."
+    )
+
+    if chosen_group == 'text_generation':
+        writing_rules = (
+            "\n\nWRITING TOOL PRIORITY RULES (text_generation group):"
+            "\n- If a source/reference file is available or the task says to base writing on existing material, call write_text_from_source first."
+            "\n- If revising an existing output file, call edit_text."
+            "\n- Use write_text only when no source file is available and the task is net-new writing."
+            "\n- Prefer source-grounded writing over free-form writing when either can satisfy the subtask."
+        )
+        return base + writing_rules
+
+    return base
+
+
 def build_selector_messages(subtask, all_results):
     context_parts = [f"Current subtask: {subtask}"]
     if all_results:
@@ -214,6 +235,10 @@ def build_selector_messages(subtask, all_results):
             f"You are a tool selector. Given a subtask, first pick the best tool group, "
             f"then call up to {cfg['max_tools_per_task']} tools from that group to accomplish the subtask.\n\n"
             f"Available groups:\n{group_list}\n\n"
+            f"Selection rules:\n"
+            f"- Choose text_generation for writing/editing tasks.\n"
+            f"- In text_generation, prefer write_text_from_source when source/reference material is available.\n"
+            f"- Use edit_text when revising an existing file, write_text for net-new writing without source material.\n\n"
             f"Reply with the group name on the first line, then call the appropriate tools."
         )},
         {'role': 'user', 'content': "\n".join(context_parts)}
@@ -350,11 +375,7 @@ def main_tui():
 
                     def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
                         tool_messages = [
-                            {'role': 'system', 'content': (
-                                f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
-                                f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
-                                f"Use up to {cfg['max_tools_per_task']} tool calls."
-                            )},
+                            {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                             {'role': 'user', 'content': "\n".join(_context_parts)}
                         ]
                         _, _, tool_calls = query_ollama(
@@ -558,10 +579,7 @@ def main_legacy():
 
                 def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
                     tool_messages = [
-                        {'role': 'system', 'content': (
-                            f"You are a tool executor. Call the appropriate tools to accomplish this subtask. "
-                            f"Use up to {cfg['max_tools_per_task']} tool calls."
-                        )},
+                        {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                         {'role': 'user', 'content': "\n".join(_context_parts)}
                     ]
                     _, _, tool_calls = query_ollama(
