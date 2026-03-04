@@ -5,9 +5,9 @@ from providers import build_tool_schemas
 build_tool_registry()
 
 TOOL_GROUPS = {
-    "web_search": {
-        "description": "Search the web and download files",
-        "tools": ["search_web", "check_connectivity", "search_and_download_files"]
+    "gather_online_information": {
+        "description": "Search the web, download online files, and run social media search",
+        "tools": ["search_web", "check_connectivity", "search_and_download_files", "social_media_search"]
     },
     "social_media": {
         "description": "Interact with Moltbook social media platform",
@@ -17,14 +17,14 @@ TOOL_GROUPS = {
             "social_media_upvote",
             "social_media_downvote", "social_media_upvote_comment",
             "get_social_media_post", "list_community_posts",
-            "social_media_search", "get_personal_history",
+            "get_personal_history",
             "get_user_profile", "list_communities",
             "check_agent_status", "update_profile", "make_community"
         ]
     },
     "document_processing": {
-        "description": "Ingest, query, and manage PDFs and CSVs",
-        "tools": ["ingest_pdf", "ingest_csv", "query_documents", "list_downloaded_files"]
+        "description": "Ingest, query, and manage PDFs, CSVs, and text-like web files",
+        "tools": ["ingest_pdf", "ingest_csv", "ingest_html", "ingest_text", "ingest_json", "query_documents", "list_downloaded_files"]
     },
     "file_operations": {
         "description": "Read and write files in the working directory",

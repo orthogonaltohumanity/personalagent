@@ -2,10 +2,12 @@ import os
 import json
 import math
 import random
+import re
 import select
 import sys
 import subprocess
 import threading
+import html
 from datetime import datetime
 from ollama import generate as ollama_generate, embed as ollama_embed, chat as ollama_chat
 
@@ -316,13 +318,16 @@ def check_connectivity(host: str = '8.8.8.8', count: int = 1, timeout_seconds: i
 _SUPPORTED_FILETYPES = {
     "pdf": {"extensions": [".pdf"], "content_types": ["application/pdf"]},
     "csv": {"extensions": [".csv"], "content_types": ["text/csv", "application/csv", "text/plain"]},
+    "html": {"extensions": [".html", ".htm"], "content_types": ["text/html", "application/xhtml+xml"]},
+    "txt": {"extensions": [".txt", ".md", ".rst"], "content_types": ["text/plain", "text/markdown", "text/x-rst"]},
+    "json": {"extensions": [".json"], "content_types": ["application/json", "text/json", "text/plain"]},
 }
 
 _INGEST_FUNCTIONS = {}
 
 
 def search_and_download_files(query: str, filetype: str = "pdf"):
-    '''Searches for and downloads files of 'filetype' (pdf, csv) relevant to 'query'. Auto-ingests into the vector index.'''
+    '''Searches for and downloads files by type (pdf, csv, html, txt, json) relevant to 'query'. Auto-ingests into the vector index.'''
     if filetype not in _SUPPORTED_FILETYPES:
         return f"Unsupported filetype '{filetype}'. Supported: {list(_SUPPORTED_FILETYPES.keys())}"
     ft = _SUPPORTED_FILETYPES[filetype]
@@ -362,7 +367,7 @@ def search_and_download_files(query: str, filetype: str = "pdf"):
     return f"New files: {name_hist}"
 
 
-# ── PDF / CSV ingestion ──────────────────────────────────────────────────────
+# ── Document ingestion ───────────────────────────────────────────────────────
 
 def ingest_pdf(filename: str):
     '''Extracts text from a PDF, chunks it, embeds each chunk, and stores in the vector index.'''
@@ -446,14 +451,74 @@ def ingest_csv(filename: str):
     return f"Ingested {count} chunks from {filename} ({total_rows} rows)"
 
 
+def _ingest_text_content(filename: str, text: str, page: int = 0):
+    clean = (text or "").strip()
+    if not clean:
+        return f"'{filename}' is empty or unreadable."
+    length = len(clean)
+    if length <= 5_000:
+        chunk_size, overlap = 600, 80
+    elif length <= 50_000:
+        chunk_size, overlap = 1000, 120
+    else:
+        chunk_size, overlap = 1400, 180
+    count = 0
+    for chunk in _chunk_text(clean, size=chunk_size, overlap=overlap):
+        embedding = _embed(chunk)
+        state.pdf_index.append({
+            "text": chunk,
+            "source": filename,
+            "page": page,
+            "embedding": embedding,
+        })
+        count += 1
+    state.save_pdf_index()
+    _log(f"Ingested {filename}: {count} chunks ({length} characters)")
+    return f"Ingested {count} chunks from {filename} ({length} characters)"
+
+
+def ingest_text(filename: str):
+    '''Reads plain text/markdown/reStructuredText, chunks, embeds, and stores in the vector index.'''
+    with open(filename, 'r', errors='replace') as f:
+        text = f.read()
+    return _ingest_text_content(filename, text)
+
+
+def ingest_html(filename: str):
+    '''Reads HTML, strips tags/scripts/styles, chunks readable text, embeds, and stores in the vector index.'''
+    with open(filename, 'r', errors='replace') as f:
+        raw_html = f.read()
+    text = re.sub(r"<script[\\s\\S]*?</script>", " ", raw_html, flags=re.IGNORECASE)
+    text = re.sub(r"<style[\\s\\S]*?</style>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text)
+    return _ingest_text_content(filename, text)
+
+
+def ingest_json(filename: str):
+    '''Reads JSON, converts structured data to text, chunks, embeds, and stores in the vector index.'''
+    with open(filename, 'r', errors='replace') as f:
+        content = f.read()
+    try:
+        data = json.loads(content)
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+    except json.JSONDecodeError:
+        text = content
+    return _ingest_text_content(filename, text)
+
+
 _INGEST_FUNCTIONS["pdf"] = ingest_pdf
 _INGEST_FUNCTIONS["csv"] = ingest_csv
+_INGEST_FUNCTIONS["html"] = ingest_html
+_INGEST_FUNCTIONS["txt"] = ingest_text
+_INGEST_FUNCTIONS["json"] = ingest_json
 
 
 def query_documents(query: str, top_k: int = 5):
-    '''Semantic search across all ingested documents (PDFs, CSVs). Returns the top-k most relevant chunks with source info.'''
+    '''Semantic search across all ingested documents (PDFs, CSVs, HTML, text, JSON). Returns top-k chunks with source info.'''
     if not state.pdf_index:
-        return "No documents ingested yet. Use ingest_pdf, ingest_csv, or search_and_download_files first."
+        return "No documents ingested yet. Use ingest_pdf, ingest_csv, ingest_html, ingest_text, ingest_json, or search_and_download_files first."
     q_emb = _embed(query)
     scored = []
     for entry in state.pdf_index:
@@ -470,8 +535,8 @@ def query_documents(query: str, top_k: int = 5):
 
 
 def list_downloaded_files():
-    '''Lists all downloaded files (PDFs, CSVs) in the downloads and pdfs directories.'''
-    supported_ext = ('.pdf', '.csv')
+    '''Lists all downloaded files supported for document ingestion.'''
+    supported_ext = ('.pdf', '.csv', '.html', '.htm', '.txt', '.md', '.rst', '.json')
     found = []
     for directory in (str(resolve_path(cfg['downloads_directory'])), str(resolve_path('pdfs'))):
         try:
@@ -1144,6 +1209,9 @@ def build_tool_registry():
         # Documents
         'ingest_pdf': ingest_pdf,
         'ingest_csv': ingest_csv,
+        'ingest_html': ingest_html,
+        'ingest_text': ingest_text,
+        'ingest_json': ingest_json,
         'query_documents': query_documents,
         'list_downloaded_files': list_downloaded_files,
         # Social media
