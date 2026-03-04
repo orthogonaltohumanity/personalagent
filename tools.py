@@ -283,7 +283,6 @@ def search_web(text: str):
         'result_count': len(results),
         'results': results,
     }
-<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
 
 
 def check_connectivity(host: str = '8.8.8.8', count: int = 1, timeout_seconds: int = 2):
@@ -318,6 +317,16 @@ def check_connectivity(host: str = '8.8.8.8', count: int = 1, timeout_seconds: i
 
 def _email_settings():
     """Load email settings from environment variables."""
+    def _clean_env(*keys):
+        for key in keys:
+            value = os.environ.get(key)
+            if value is None:
+                continue
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned
+        return None
+
     def _int_env(*keys, default):
         for key in keys:
             value = os.environ.get(key)
@@ -330,14 +339,36 @@ def _email_settings():
         return default
 
     return {
-        'imap_server': os.environ.get('EMAIL_IMAP_SERVER') or os.environ.get('IMAP_SERVER'),
+        'imap_server': _clean_env('EMAIL_IMAP_SERVER', 'IMAP_SERVER'),
         'imap_port': _int_env('EMAIL_IMAP_PORT', 'IMAP_PORT', default=993),
-        'smtp_server': os.environ.get('EMAIL_SMTP_SERVER') or os.environ.get('SMTP_SERVER'),
+        'imap_security': (_clean_env('EMAIL_IMAP_SECURITY', 'IMAP_SECURITY') or 'ssl').lower(),
+        'smtp_server': _clean_env('EMAIL_SMTP_SERVER', 'SMTP_SERVER'),
         'smtp_port': _int_env('EMAIL_SMTP_PORT', 'SMTP_PORT', default=587),
-        'username': os.environ.get('EMAIL_USERNAME') or os.environ.get('EMAIL_USER') or os.environ.get('EMAIL_ADDRESS'),
-        'password': os.environ.get('EMAIL_PASSWORD') or os.environ.get('EMAIL_PASS'),
-        'from_address': os.environ.get('EMAIL_ADDRESS') or os.environ.get('EMAIL_USERNAME') or os.environ.get('EMAIL_USER'),
+        'smtp_security': (_clean_env('EMAIL_SMTP_SECURITY', 'SMTP_SECURITY') or 'starttls').lower(),
+        'username': _clean_env('EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
+        'password': _clean_env('EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'imap_username': _clean_env('EMAIL_IMAP_USERNAME', 'IMAP_USERNAME', 'EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
+        'imap_password': _clean_env('EMAIL_IMAP_PASSWORD', 'IMAP_PASSWORD', 'EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'smtp_username': _clean_env('EMAIL_SMTP_USERNAME', 'SMTP_USERNAME', 'EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
+        'smtp_password': _clean_env('EMAIL_SMTP_PASSWORD', 'SMTP_PASSWORD', 'EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'smtp_auth_mode': (_clean_env('EMAIL_SMTP_AUTH', 'SMTP_AUTH') or 'login').lower(),
+        'from_address': _clean_env('EMAIL_ADDRESS', 'EMAIL_USERNAME', 'EMAIL_USER'),
     }
+
+
+def _open_imap_connection(settings):
+    import imaplib
+
+    mode = (settings.get('imap_security') or 'ssl').lower()
+    if mode == 'ssl':
+        return imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    if mode == 'plain':
+        return imaplib.IMAP4(settings['imap_server'], settings['imap_port'])
+    if mode == 'starttls':
+        conn = imaplib.IMAP4(settings['imap_server'], settings['imap_port'])
+        conn.starttls()
+        return conn
+    raise ValueError('imap_security must be one of: ssl, starttls, plain')
 
 
 def _decode_mime_header(value: str):
@@ -369,28 +400,36 @@ def _imap_disconnect(conn):
 
 def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 10):
     '''Lists emails by category (unread/read/all) from a mailbox with sender, subject, date, and seen status.'''
-    import imaplib
     import email
 
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
 
-    if category.lower() == 'unread':
+    category_value = str(category or 'unread').strip().lower()
+    if category_value == 'unread':
         criteria = '(UNSEEN)'
-    elif category.lower() == 'read':
+    elif category_value == 'read':
         criteria = '(SEEN)'
-    else:
+    elif category_value == 'all':
         criteria = 'ALL'
+    else:
+        return {'error': "category must be one of: unread, read, all"}
 
-    limit = max(1, int(limit))
+    try:
+        limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        return {'error': 'limit must be an integer'}
     result_rows = []
 
-    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
     try:
-        conn.login(settings['username'], settings['password'])
+        conn = _open_imap_connection(settings)
+    except ValueError as e:
+        return {'error': str(e)}
+    try:
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}
@@ -424,7 +463,7 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
 
         return {
             'mailbox': mailbox,
-            'category': category,
+            'category': category_value,
             'count': len(result_rows),
             'emails': result_rows,
         }
@@ -434,18 +473,24 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
 
 def read_email(message_id: str, mailbox: str = 'INBOX'):
     '''Reads one email by IMAP message id and returns headers/body text.'''
-    import imaplib
     import email
 
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
 
-    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    message_id = str(message_id).strip()
+    if not message_id:
+        return {'error': 'message_id is required'}
+
     try:
-        conn.login(settings['username'], settings['password'])
+        conn = _open_imap_connection(settings)
+    except ValueError as e:
+        return {'error': str(e)}
+    try:
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}
@@ -499,7 +544,7 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
     from email.message import EmailMessage
 
     settings = _email_settings()
-    required = ('smtp_server', 'username', 'password', 'from_address')
+    required = ('smtp_server', 'from_address')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for SMTP: {', '.join(missing)}"}
@@ -513,15 +558,30 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
     msg.set_content(body)
 
     recipients = [e.strip() for e in (to + ',' + cc + ',' + bcc).split(',') if e.strip()]
+    if not recipients:
+        return {'error': 'At least one recipient is required'}
 
-    with smtplib.SMTP(settings['smtp_server'], settings['smtp_port'], timeout=30) as server:
+    smtp_security = (settings.get('smtp_security') or 'starttls').lower()
+    if smtp_security == 'ssl':
+        server_context = smtplib.SMTP_SSL(settings['smtp_server'], settings['smtp_port'], timeout=30)
+    elif smtp_security in ('starttls', 'plain'):
+        server_context = smtplib.SMTP(settings['smtp_server'], settings['smtp_port'], timeout=30)
+    else:
+        return {'error': 'smtp_security must be one of: starttls, ssl, plain'}
+
+    smtp_auth_mode = (settings.get('smtp_auth_mode') or 'login').lower()
+    if smtp_auth_mode not in ('login', 'none'):
+        return {'error': 'smtp_auth_mode must be one of: login, none'}
+
+    with server_context as server:
         server.ehlo()
-        try:
+        if smtp_security == 'starttls':
             server.starttls()
             server.ehlo()
-        except Exception:
-            pass
-        server.login(settings['username'], settings['password'])
+        if smtp_auth_mode == 'login':
+            if not settings.get('smtp_username') or not settings.get('smtp_password'):
+                return {'error': 'Missing email env vars for SMTP auth: smtp_username, smtp_password'}
+            server.login(settings['smtp_username'], settings['smtp_password'])
         server.send_message(msg, from_addr=settings['from_address'], to_addrs=recipients)
 
     return {
@@ -530,22 +590,50 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
         'cc': cc,
         'bcc_count': len([e for e in bcc.split(',') if e.strip()]),
         'subject': subject,
+        'smtp_security': smtp_security,
+        'smtp_auth_mode': smtp_auth_mode,
     }
+
+
+def send_email_from_file(to: str, subject: str, source_filename: str, cc: str = '', bcc: str = ''):
+    '''Reads body text from source_filename in the working directory and sends it as an email.'''
+    source_path = _work_path(source_filename)
+    try:
+        with open(source_path, 'r', encoding='utf-8') as f:
+            body = f.read()
+    except FileNotFoundError:
+        return {'error': f"Source file '{source_filename}' not found in {state.working_directory}"}
+    except OSError as e:
+        return {'error': f"Unable to read source file '{source_filename}': {e}"}
+
+    if not body.strip():
+        return {'error': f"Source file '{source_filename}' is empty"}
+
+    result = send_email(to=to, subject=subject, body=body, cc=cc, bcc=bcc)
+    if isinstance(result, dict) and result.get('status') == 'sent':
+        result = dict(result)
+        result['source'] = source_filename
+    return result
 
 
 def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
     '''Marks an email as seen/unseen by IMAP message id.'''
-    import imaplib
-
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
 
-    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    message_id = str(message_id).strip()
+    if not message_id:
+        return {'error': 'message_id is required'}
+
     try:
-        conn.login(settings['username'], settings['password'])
+        conn = _open_imap_connection(settings)
+    except ValueError as e:
+        return {'error': str(e)}
+    try:
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}
@@ -557,8 +645,7 @@ def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
         return {'status': 'ok', 'id': message_id, 'seen': seen, 'mailbox': mailbox}
     finally:
         _imap_disconnect(conn)
-=======
->>>>>>> main
+
 
 
 _SUPPORTED_FILETYPES = {
@@ -1393,6 +1480,7 @@ def build_tool_registry():
         'list_emails': list_emails,
         'read_email': read_email,
         'send_email': send_email,
+        'send_email_from_file': send_email_from_file,
         'mark_email_seen': mark_email_seen,
         # Documents
         'ingest_pdf': ingest_pdf,
