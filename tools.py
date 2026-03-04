@@ -108,6 +108,19 @@ def _ensure_parent_dir(path: str):
         os.makedirs(parent, exist_ok=True)
 
 
+def _resolve_workdir_subpath(path: str = '.'):
+    """Resolve a path under the working directory and block path traversal."""
+    base = os.path.abspath(state.working_directory)
+    rel = path or '.'
+    candidate = os.path.abspath(os.path.join(base, rel))
+    try:
+        if os.path.commonpath([base, candidate]) != base:
+            raise ValueError('path escapes working directory')
+    except ValueError:
+        raise ValueError('path escapes working directory')
+    return candidate
+
+
 def _load_system_prompt_text():
     """Load system prompt from configured path, tolerant of missing files."""
     try:
@@ -248,9 +261,301 @@ def _chunk_text(text, size=500, overlap=50):
 # ── Web / research ───────────────────────────────────────────────────────────
 
 def search_web(text: str):
-    '''Searches the web via DuckDuckGo and returns up to 5 results'''
+    '''Searches the web via DuckDuckGo, saves results to a file, and returns both the file path and results.'''
     from ddgs import DDGS
-    return DDGS().text(text, max_results=cfg['max_web_search_results'])
+    results = list(DDGS().text(text, max_results=cfg['max_web_search_results']))
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_name = f"websearch_{timestamp}.json"
+    output_path = _work_path(output_name)
+    _ensure_parent_dir(output_path)
+
+    payload = {
+        'query': text,
+        'timestamp': datetime.now().isoformat(),
+        'results': results,
+    }
+    with open(output_path, 'w') as f:
+        json.dump(payload, f, indent=2)
+
+    return {
+        'saved_to': output_path,
+        'result_count': len(results),
+        'results': results,
+    }
+
+
+def check_connectivity(host: str = '8.8.8.8', count: int = 1, timeout_seconds: int = 2):
+    '''Checks internet connectivity by running ping (default host: 8.8.8.8). Returns online status and command output.'''
+    try:
+        count = max(1, int(count))
+        timeout_seconds = max(1, int(timeout_seconds))
+    except (TypeError, ValueError):
+        return {"online": False, "error": "count and timeout_seconds must be integers"}
+
+    cmd = ['ping', '-c', str(count), '-W', str(timeout_seconds), host]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(3, timeout_seconds * count + 2))
+    except FileNotFoundError:
+        return {"online": False, "error": "ping command not found", "host": host}
+    except subprocess.TimeoutExpired:
+        return {"online": False, "error": "ping command timed out", "host": host}
+
+    output = (result.stdout or '') + (result.stderr or '')
+    online = result.returncode == 0
+    return {
+        'online': online,
+        'host': host,
+        'count': count,
+        'timeout_seconds': timeout_seconds,
+        'returncode': result.returncode,
+        'output': output.strip()[:2000],
+    }
+
+
+# ── Email ────────────────────────────────────────────────────────────────────
+
+def _email_settings():
+    """Load email settings from environment variables."""
+    def _int_env(*keys, default):
+        for key in keys:
+            value = os.environ.get(key)
+            if value in (None, ''):
+                continue
+            try:
+                return int(value)
+            except ValueError:
+                return default
+        return default
+
+    return {
+        'imap_server': os.environ.get('EMAIL_IMAP_SERVER') or os.environ.get('IMAP_SERVER'),
+        'imap_port': _int_env('EMAIL_IMAP_PORT', 'IMAP_PORT', default=993),
+        'smtp_server': os.environ.get('EMAIL_SMTP_SERVER') or os.environ.get('SMTP_SERVER'),
+        'smtp_port': _int_env('EMAIL_SMTP_PORT', 'SMTP_PORT', default=587),
+        'username': os.environ.get('EMAIL_USERNAME') or os.environ.get('EMAIL_USER') or os.environ.get('EMAIL_ADDRESS'),
+        'password': os.environ.get('EMAIL_PASSWORD') or os.environ.get('EMAIL_PASS'),
+        'from_address': os.environ.get('EMAIL_ADDRESS') or os.environ.get('EMAIL_USERNAME') or os.environ.get('EMAIL_USER'),
+    }
+
+
+def _decode_mime_header(value: str):
+    from email.header import decode_header
+    if not value:
+        return ''
+    parts = []
+    for part, enc in decode_header(value):
+        if isinstance(part, bytes):
+            parts.append(part.decode(enc or 'utf-8', errors='replace'))
+        else:
+            parts.append(part)
+    return ''.join(parts)
+
+
+def _imap_disconnect(conn):
+    """Best-effort IMAP close/logout without raising."""
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+    try:
+        conn.logout()
+    except Exception:
+        pass
+
+
+def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 10):
+    '''Lists emails by category (unread/read/all) from a mailbox with sender, subject, date, and seen status.'''
+    import imaplib
+    import email
+
+    settings = _email_settings()
+    required = ('imap_server', 'username', 'password')
+    missing = [k for k in required if not settings.get(k)]
+    if missing:
+        return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
+
+    if category.lower() == 'unread':
+        criteria = '(UNSEEN)'
+    elif category.lower() == 'read':
+        criteria = '(SEEN)'
+    else:
+        criteria = 'ALL'
+
+    limit = max(1, int(limit))
+    result_rows = []
+
+    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    try:
+        conn.login(settings['username'], settings['password'])
+        status, _ = conn.select(mailbox)
+        if status != 'OK':
+            return {'error': f"Unable to open mailbox '{mailbox}'"}
+
+        status, data = conn.search(None, criteria)
+        if status != 'OK':
+            return {'error': f"Search failed for category '{category}'"}
+
+        ids = data[0].split()[-limit:]
+        ids.reverse()
+        for mid in ids:
+            status, msg_data = conn.fetch(mid, '(BODY.PEEK[HEADER] FLAGS)')
+            if status != 'OK' or not msg_data:
+                continue
+            header_bytes = b''
+            flags_blob = ''
+            for part in msg_data:
+                if isinstance(part, tuple):
+                    if isinstance(part[1], bytes):
+                        header_bytes = part[1]
+                    flags_blob = str(part[0])
+            msg = email.message_from_bytes(header_bytes)
+            seen = '\\Seen' in flags_blob
+            result_rows.append({
+                'id': mid.decode(),
+                'from': _decode_mime_header(msg.get('From', '')),
+                'subject': _decode_mime_header(msg.get('Subject', '')),
+                'date': msg.get('Date', ''),
+                'seen': seen,
+            })
+
+        return {
+            'mailbox': mailbox,
+            'category': category,
+            'count': len(result_rows),
+            'emails': result_rows,
+        }
+    finally:
+        _imap_disconnect(conn)
+
+
+def read_email(message_id: str, mailbox: str = 'INBOX'):
+    '''Reads one email by IMAP message id and returns headers/body text.'''
+    import imaplib
+    import email
+
+    settings = _email_settings()
+    required = ('imap_server', 'username', 'password')
+    missing = [k for k in required if not settings.get(k)]
+    if missing:
+        return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
+
+    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    try:
+        conn.login(settings['username'], settings['password'])
+        status, _ = conn.select(mailbox)
+        if status != 'OK':
+            return {'error': f"Unable to open mailbox '{mailbox}'"}
+
+        status, msg_data = conn.fetch(message_id.encode(), '(RFC822 FLAGS)')
+        if status != 'OK' or not msg_data:
+            return {'error': f"Unable to fetch email id {message_id}"}
+
+        raw_msg = None
+        flags_blob = ''
+        for part in msg_data:
+            if isinstance(part, tuple):
+                if isinstance(part[1], bytes):
+                    raw_msg = part[1]
+                flags_blob = str(part[0])
+        if raw_msg is None:
+            return {'error': f"No message payload for id {message_id}"}
+
+        msg = email.message_from_bytes(raw_msg)
+        body = ''
+        if msg.is_multipart():
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                disp = str(part.get('Content-Disposition') or '')
+                if ctype == 'text/plain' and 'attachment' not in disp.lower():
+                    payload = part.get_payload(decode=True) or b''
+                    charset = part.get_content_charset() or 'utf-8'
+                    body += payload.decode(charset, errors='replace')
+        else:
+            payload = msg.get_payload(decode=True) or b''
+            charset = msg.get_content_charset() or 'utf-8'
+            body = payload.decode(charset, errors='replace')
+
+        return {
+            'id': message_id,
+            'mailbox': mailbox,
+            'from': _decode_mime_header(msg.get('From', '')),
+            'to': _decode_mime_header(msg.get('To', '')),
+            'subject': _decode_mime_header(msg.get('Subject', '')),
+            'date': msg.get('Date', ''),
+            'seen': '\\Seen' in flags_blob,
+            'body': body.strip()[:20000],
+        }
+    finally:
+        _imap_disconnect(conn)
+
+
+def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
+    '''Sends an email using SMTP environment configuration. cc and bcc are optional comma-separated lists.'''
+    import smtplib
+    from email.message import EmailMessage
+
+    settings = _email_settings()
+    required = ('smtp_server', 'username', 'password', 'from_address')
+    missing = [k for k in required if not settings.get(k)]
+    if missing:
+        return {'error': f"Missing email env vars for SMTP: {', '.join(missing)}"}
+
+    msg = EmailMessage()
+    msg['From'] = settings['from_address']
+    msg['To'] = to
+    msg['Subject'] = subject
+    if cc.strip():
+        msg['Cc'] = cc
+    msg.set_content(body)
+
+    recipients = [e.strip() for e in (to + ',' + cc + ',' + bcc).split(',') if e.strip()]
+
+    with smtplib.SMTP(settings['smtp_server'], settings['smtp_port'], timeout=30) as server:
+        server.ehlo()
+        try:
+            server.starttls()
+            server.ehlo()
+        except Exception:
+            pass
+        server.login(settings['username'], settings['password'])
+        server.send_message(msg, from_addr=settings['from_address'], to_addrs=recipients)
+
+    return {
+        'status': 'sent',
+        'to': to,
+        'cc': cc,
+        'bcc_count': len([e for e in bcc.split(',') if e.strip()]),
+        'subject': subject,
+    }
+
+
+def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
+    '''Marks an email as seen/unseen by IMAP message id.'''
+    import imaplib
+
+    settings = _email_settings()
+    required = ('imap_server', 'username', 'password')
+    missing = [k for k in required if not settings.get(k)]
+    if missing:
+        return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
+
+    conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
+    try:
+        conn.login(settings['username'], settings['password'])
+        status, _ = conn.select(mailbox)
+        if status != 'OK':
+            return {'error': f"Unable to open mailbox '{mailbox}'"}
+
+        op = '+FLAGS' if seen else '-FLAGS'
+        status, _ = conn.store(message_id.encode(), op, '(\\Seen)')
+        if status != 'OK':
+            return {'error': f"Unable to update seen flag for id {message_id}"}
+        return {'status': 'ok', 'id': message_id, 'seen': seen, 'mailbox': mailbox}
+    finally:
+        _imap_disconnect(conn)
 
 
 _SUPPORTED_FILETYPES = {
@@ -452,6 +757,37 @@ def edit(file: str, append: bool, text: str):
         return f'{action} {file} ({len(text)} chars)'
     except Exception as e:
         return f"Error: {e}"
+
+
+def list_working_files(path: str = '.', recursive: bool = True):
+    '''Lists files in the Playground working directory or one of its subdirectories.
+    path is relative to the working directory. Set recursive=False for top-level only.'''
+    try:
+        root = _resolve_workdir_subpath(path)
+    except Exception as e:
+        return f"Error: {e}"
+
+    if not os.path.exists(root):
+        return f"Error: path '{path}' does not exist in {state.working_directory}"
+
+    files = []
+    base = os.path.abspath(state.working_directory)
+    if os.path.isfile(root):
+        files.append(os.path.relpath(root, base))
+    else:
+        if recursive:
+            for dirpath, _, filenames in os.walk(root):
+                for filename in filenames:
+                    full = os.path.join(dirpath, filename)
+                    files.append(os.path.relpath(full, base))
+        else:
+            for name in os.listdir(root):
+                full = os.path.join(root, name)
+                if os.path.isfile(full):
+                    files.append(os.path.relpath(full, base))
+
+    files.sort()
+    return files
 
 
 # ── Dynamic tool creation ────────────────────────────────────────────────────
@@ -1048,7 +1384,13 @@ def build_tool_registry():
         'set_short_term_goal': set_short_term_goal,
         # Web / research
         'search_web': search_web,
+        'check_connectivity': check_connectivity,
         'search_and_download_files': search_and_download_files,
+        # Email
+        'list_emails': list_emails,
+        'read_email': read_email,
+        'send_email': send_email,
+        'mark_email_seen': mark_email_seen,
         # Documents
         'ingest_pdf': ingest_pdf,
         'ingest_csv': ingest_csv,
@@ -1074,6 +1416,7 @@ def build_tool_registry():
         # Files
         'read_file': read_file,
         'edit': edit,
+        'list_working_files': list_working_files,
         # Code generation
         'generate_code': generate_code,
         'generate_code_edit': generate_code_edit,

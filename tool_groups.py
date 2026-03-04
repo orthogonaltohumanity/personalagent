@@ -7,7 +7,7 @@ build_tool_registry()
 TOOL_GROUPS = {
     "web_search": {
         "description": "Search the web and download files",
-        "tools": ["search_web", "search_and_download_files"]
+        "tools": ["search_web", "check_connectivity", "search_and_download_files"]
     },
     "social_media": {
         "description": "Interact with Moltbook social media platform",
@@ -28,7 +28,7 @@ TOOL_GROUPS = {
     },
     "file_operations": {
         "description": "Read and write files in the working directory",
-        "tools": ["read_file", "edit"]
+        "tools": ["read_file", "edit", "list_working_files"]
     },
     "code_generation": {
         "description": "Generate or edit code using AI code models",
@@ -53,6 +53,10 @@ TOOL_GROUPS = {
             "edit_memory", "delete_memory", "list_memory_keys",
             "memory_stats", "set_short_term_goal"
         ]
+    },
+    "email": {
+        "description": "Email inbox management and sending",
+        "tools": ["list_emails", "read_email", "send_email", "mark_email_seen"]
     },
     "system": {
         "description": "Custom tool creation, user interaction, and meta-tools",
