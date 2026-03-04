@@ -347,6 +347,11 @@ def _email_settings():
         'smtp_security': (_clean_env('EMAIL_SMTP_SECURITY', 'SMTP_SECURITY') or 'starttls').lower(),
         'username': _clean_env('EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
         'password': _clean_env('EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'imap_username': _clean_env('EMAIL_IMAP_USERNAME', 'IMAP_USERNAME', 'EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
+        'imap_password': _clean_env('EMAIL_IMAP_PASSWORD', 'IMAP_PASSWORD', 'EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'smtp_username': _clean_env('EMAIL_SMTP_USERNAME', 'SMTP_USERNAME', 'EMAIL_USERNAME', 'EMAIL_USER', 'EMAIL_ADDRESS'),
+        'smtp_password': _clean_env('EMAIL_SMTP_PASSWORD', 'SMTP_PASSWORD', 'EMAIL_PASSWORD', 'EMAIL_PASS'),
+        'smtp_auth_mode': (_clean_env('EMAIL_SMTP_AUTH', 'SMTP_AUTH') or 'login').lower(),
         'from_address': _clean_env('EMAIL_ADDRESS', 'EMAIL_USERNAME', 'EMAIL_USER'),
     }
 
@@ -398,7 +403,7 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
     import email
 
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
@@ -424,7 +429,7 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
     except ValueError as e:
         return {'error': str(e)}
     try:
-        conn.login(settings['username'], settings['password'])
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}
@@ -471,7 +476,7 @@ def read_email(message_id: str, mailbox: str = 'INBOX'):
     import email
 
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
@@ -485,7 +490,7 @@ def read_email(message_id: str, mailbox: str = 'INBOX'):
     except ValueError as e:
         return {'error': str(e)}
     try:
-        conn.login(settings['username'], settings['password'])
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}
@@ -539,7 +544,7 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
     from email.message import EmailMessage
 
     settings = _email_settings()
-    required = ('smtp_server', 'username', 'password', 'from_address')
+    required = ('smtp_server', 'from_address')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for SMTP: {', '.join(missing)}"}
@@ -564,12 +569,19 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
     else:
         return {'error': 'smtp_security must be one of: starttls, ssl, plain'}
 
+    smtp_auth_mode = (settings.get('smtp_auth_mode') or 'login').lower()
+    if smtp_auth_mode not in ('login', 'none'):
+        return {'error': 'smtp_auth_mode must be one of: login, none'}
+
     with server_context as server:
         server.ehlo()
         if smtp_security == 'starttls':
             server.starttls()
             server.ehlo()
-        server.login(settings['username'], settings['password'])
+        if smtp_auth_mode == 'login':
+            if not settings.get('smtp_username') or not settings.get('smtp_password'):
+                return {'error': 'Missing email env vars for SMTP auth: smtp_username, smtp_password'}
+            server.login(settings['smtp_username'], settings['smtp_password'])
         server.send_message(msg, from_addr=settings['from_address'], to_addrs=recipients)
 
     return {
@@ -578,6 +590,8 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
         'cc': cc,
         'bcc_count': len([e for e in bcc.split(',') if e.strip()]),
         'subject': subject,
+        'smtp_security': smtp_security,
+        'smtp_auth_mode': smtp_auth_mode,
     }
 
 
@@ -605,7 +619,7 @@ def send_email_from_file(to: str, subject: str, source_filename: str, cc: str = 
 def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
     '''Marks an email as seen/unseen by IMAP message id.'''
     settings = _email_settings()
-    required = ('imap_server', 'username', 'password')
+    required = ('imap_server', 'imap_username', 'imap_password')
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
@@ -619,7 +633,7 @@ def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
     except ValueError as e:
         return {'error': str(e)}
     try:
-        conn.login(settings['username'], settings['password'])
+        conn.login(settings['imap_username'], settings['imap_password'])
         status, _ = conn.select(mailbox)
         if status != 'OK':
             return {'error': f"Unable to open mailbox '{mailbox}'"}

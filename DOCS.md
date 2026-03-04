@@ -119,6 +119,25 @@ Tools are organized into 9 groups. The tool group chooser picks ONE group per su
 | email | Email inbox management and sending | list_emails, read_email, send_email, send_email_from_file, mark_email_seen |
 | system | Meta-tools | create_tool, list_custom_tools, remove_custom_tool, check_in |
 
+
+
+### Email configuration notes
+
+Email tools read settings from environment variables with these defaults:
+- IMAP: `EMAIL_IMAP_SERVER`, `EMAIL_IMAP_PORT` (or `IMAP_SERVER`, `IMAP_PORT`)
+- SMTP: `EMAIL_SMTP_SERVER`, `EMAIL_SMTP_PORT` (or `SMTP_SERVER`, `SMTP_PORT`)
+- Sender: `EMAIL_ADDRESS`
+- Generic credentials fallback: `EMAIL_USERNAME`/`EMAIL_USER`, `EMAIL_PASSWORD`/`EMAIL_PASS`
+
+Protocol-specific credentials are also supported:
+- IMAP auth: `EMAIL_IMAP_USERNAME`, `EMAIL_IMAP_PASSWORD`
+- SMTP auth: `EMAIL_SMTP_USERNAME`, `EMAIL_SMTP_PASSWORD`
+
+Transport/auth modes:
+- `EMAIL_IMAP_SECURITY` (`ssl` default, `starttls`, `plain`)
+- `EMAIL_SMTP_SECURITY` (`starttls` default, `ssl`, `plain`)
+- `EMAIL_SMTP_AUTH` (`login` default, `none`)
+
 Group definitions are in `tool_groups.py`. Key functions:
 - `get_group_summary(include_tools=True)` → formatted string for prompts. Pass `include_tools=False` for the planner to hide individual tool names.
 - `get_tools_in_group(name)` → list of function objects
