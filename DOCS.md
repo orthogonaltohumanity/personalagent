@@ -116,7 +116,7 @@ Tools are organized into 9 groups. The tool group chooser picks ONE group per su
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
 | version_control | Git operations | git_init, git_status, git_add, git_commit, git_log, git_diff, git_diff_staged, git_branch, git_checkout, git_list_branches |
 | memory | Persistent memory | search_memory, save_memory, open_memory, edit_memory, delete_memory, list_memory_keys, memory_stats, set_short_term_goal |
-| email | Email inbox management and sending | list_emails, read_email, send_email, mark_email_seen |
+| email | Email inbox management and sending | list_emails, read_email, send_email, send_email_from_file, mark_email_seen |
 | system | Meta-tools | create_tool, list_custom_tools, remove_custom_tool, check_in |
 
 Group definitions are in `tool_groups.py`. Key functions:
