@@ -54,10 +54,6 @@ TOOL_GROUPS = {
             "memory_stats", "set_short_term_goal"
         ]
     },
-    "email": {
-        "description": "Email inbox management and sending",
-        "tools": ["list_emails", "read_email", "send_email", "send_email_from_file", "mark_email_seen"]
-    },
     "system": {
         "description": "Custom tool creation, user interaction, and meta-tools",
         "tools": [
