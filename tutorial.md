@@ -23,6 +23,10 @@ Edit `config.yaml` and check at least:
 - `models.tool_user`
 - `models.verifier`
 - `system_prompt_path`
+- `planner_step_prompt_path`
+- `tool_group_chooser_prompt_path`
+- `tool_user_prompt_path`
+- `verifier_prompt_path`
 - `working_directory`
 - timeout values (`subtask_timeout_seconds`, etc.)
 

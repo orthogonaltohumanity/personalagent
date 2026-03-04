@@ -46,6 +46,10 @@ downloads_directory: "downloads"
 pdf_index_path: "pdf_index.json"
 memories_path: "memories.json"
 system_prompt_path: "system_prompt.md"
+planner_step_prompt_path: "prompts/planner_step.md"
+tool_group_chooser_prompt_path: "prompts/tool_group_chooser_step.md"
+tool_user_prompt_path: "prompts/tool_user_step.md"
+verifier_prompt_path: "prompts/verifier_step.md"
 
 # Agent defaults
 short_term_goal: "Short Term Goal Not Given. To Be Determined"

@@ -108,7 +108,7 @@ Tools are organized into 9 groups. The tool group chooser picks ONE group per su
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| web_search | Search the web and download files | search_web, search_and_download_files |
+| web_search | Search the web and download files | search_web, check_connectivity, search_and_download_files |
 | social_media | Moltbook social media platform | 16 tools (posts, file-to-post, comments, votes, profiles, communities) |
 | document_processing | PDFs and CSVs | ingest_pdf, ingest_csv, query_documents, list_downloaded_files |
 | file_operations | Read/write files | read_file, edit, list_working_files |
@@ -116,6 +116,7 @@ Tools are organized into 9 groups. The tool group chooser picks ONE group per su
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
 | version_control | Git operations | git_init, git_status, git_add, git_commit, git_log, git_diff, git_diff_staged, git_branch, git_checkout, git_list_branches |
 | memory | Persistent memory | search_memory, save_memory, open_memory, edit_memory, delete_memory, list_memory_keys, memory_stats, set_short_term_goal |
+| email | Email inbox management and sending | list_emails, read_email, send_email, mark_email_seen |
 | system | Meta-tools | create_tool, list_custom_tools, remove_custom_tool, check_in |
 
 Group definitions are in `tool_groups.py`. Key functions:
@@ -182,9 +183,26 @@ downloads_directory: "downloads"
 pdf_index_path: "pdf_index.json"
 memories_path: "memories.json"
 system_prompt_path: "system_prompt.md"
+planner_step_prompt_path: "prompts/planner_step.md"
+tool_group_chooser_prompt_path: "prompts/tool_group_chooser_step.md"
+tool_user_prompt_path: "prompts/tool_user_step.md"
+verifier_prompt_path: "prompts/verifier_step.md"
 
 short_term_goal: "Short Term Goal Not Given. To Be Determined"
 ```
+
+### Editable step prompts
+
+You can directly edit role-specific prompt files without changing code:
+- `prompts/planner_step.md`
+- `prompts/tool_group_chooser_step.md`
+- `prompts/tool_user_step.md`
+- `prompts/verifier_step.md`
+
+Each file supports simple `{{token}}` replacement where applicable:
+- planner: `{{max_subtasks}}`, `{{group_summary}}`
+- chooser: `{{group_list}}`, `{{max_tools_per_task}}`
+- tool user: `{{max_tools_per_task}}`, `{{chosen_group}}`
 
 ### config.py
 
