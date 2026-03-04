@@ -137,6 +137,38 @@ def detect_subtask_failure(results):
     return False, ""
 
 
+def build_retry_planning_input(user_task, failure_reason, all_results):
+    """Build a re-planning prompt after execution failure.
+
+    Important: do not feed raw `Error:` strings back into the planner.
+    Those error prefixes tend to get echoed into the next plan and can cause
+    the first subtask of subsequent loops to repeat the same failure.
+    """
+    summarized_results = []
+    for task_desc, results in all_results:
+        if not results:
+            continue
+        successful_calls = [
+            f"{fn}→{res[:100]}"
+            for fn, _, res in results
+            if not str(res).startswith("Error:")
+        ]
+        if successful_calls:
+            summarized_results.append(f"  {task_desc}: {', '.join(successful_calls)}")
+
+    clean_failure_reason = re.sub(r"\bError:\s*", "", failure_reason)
+    clean_failure_reason = clean_failure_reason.strip()
+
+    retry_prompt = (
+        f"Original task: {user_task}\n\n"
+        f"Execution failed during subtask execution:\n{clean_failure_reason}\n\n"
+        f"Do not repeat the same failed approach unchanged. Re-plan using an alternative tool group or strategy."
+    )
+    if summarized_results:
+        retry_prompt += "\n\nUseful successful results so far:\n" + "\n".join(summarized_results)
+    return retry_prompt
+
+
 def build_planner_messages(system_prompt, planning_input):
     group_summary = get_group_summary(include_tools=False)
     return [
@@ -370,18 +402,15 @@ def main_tui():
                             break
                         if user_input.lower() in ('n', 'no', ''):
                             break
-                        planning_input = user_input if user_input.lower() not in ('y', 'yes') else failure_reason
+                        planning_input = (
+                            user_input
+                            if user_input.lower() not in ('y', 'yes')
+                            else build_retry_planning_input(user_task, failure_reason, all_results)
+                        )
                         verification_loops = 0
                     else:
                         tui.state.add_log(f"Execution failed — re-planning (loop {verification_loops + 1})")
-                        planning_input = (
-                            f"Original task: {user_task}\n\n"
-                            f"Execution failed during subtask execution:\n{failure_reason}\n\n"
-                            f"Results so far:\n" + "\n".join(
-                                f"  {t}: {', '.join(f'{fn}→{r[:100]}' for fn, _, r in res) if res else '(no results)'}"
-                                for t, res in all_results
-                            ) + "\n\nRe-plan to complete the task, working around the failure."
-                        )
+                        planning_input = build_retry_planning_input(user_task, failure_reason, all_results)
                     continue
 
                 # ── VERIFY PHASE ──────────────────────────────────────
@@ -574,18 +603,15 @@ def main_legacy():
                         break
                     if user_input.lower() in ('n', 'no', ''):
                         break
-                    planning_input = user_input if user_input.lower() not in ('y', 'yes') else failure_reason
+                    planning_input = (
+                        user_input
+                        if user_input.lower() not in ('y', 'yes')
+                        else build_retry_planning_input(user_task, failure_reason, all_results)
+                    )
                     verification_loops = 0
                 else:
                     print(f"\n[Execution failed — re-planning (loop {verification_loops + 1})]")
-                    planning_input = (
-                        f"Original task: {user_task}\n\n"
-                        f"Execution failed during subtask execution:\n{failure_reason}\n\n"
-                        f"Results so far:\n" + "\n".join(
-                            f"  {t}: {', '.join(f'{fn}→{r[:100]}' for fn, _, r in res) if res else '(no results)'}"
-                            for t, res in all_results
-                        ) + "\n\nRe-plan to complete the task, working around the failure."
-                    )
+                    planning_input = build_retry_planning_input(user_task, failure_reason, all_results)
                 continue
 
             # VERIFY
