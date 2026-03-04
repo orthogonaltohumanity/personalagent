@@ -43,6 +43,14 @@ If your terminal has issues with fullscreen TUI behavior:
 python main.py --no-tui
 ```
 
+### Conversational chat mode (single model)
+
+```bash
+python chat.py
+```
+
+This uses `chat_model` from `config.yaml` (or falls back to planner model) and can use tools for web browsing, memory, and document download/read workflows.
+
 ## 5) How execution/replanning works
 
 The loop is:

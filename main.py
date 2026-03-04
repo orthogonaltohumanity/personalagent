@@ -190,9 +190,12 @@ def build_planner_messages(system_prompt, planning_input):
             f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
             f"You do NOT call tools, write code, or perform tasks. A separate TOOL SELECTOR executes your plan.\n\n"
             f"RULES:\n"
-            f"- First subtask should always be a memory recall (search_memory for identity, goals, context)\n"
-            f"- Last subtask should save important info to memory when appropriate\n"
+            f"- First subtask should always be a memory recall (search_memory for identity, goals, context).\n"
+            f"- Include at least one dedicated memory-saving subtask near the end (save_memory) for durable findings, decisions, and outputs.\n"
+            f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
+            f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
             f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
+            f"- Prefer subtasks that naturally require multiple tool calls when evidence gathering + action are both needed.\n"
             f"- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
             f"{group_summary}"
         )},
@@ -205,16 +208,18 @@ def build_tool_executor_system_prompt(chosen_group):
     base = (
         f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
         f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
-        f"Use up to {cfg['max_tools_per_task']} tool calls."
+        f"Use up to {cfg['max_tools_per_task']} tool calls. Prefer 2+ tool calls when they improve quality (e.g., retrieve then write/save). "
+        f"Use memory tools distinctly: search/open for recall, save for new durable knowledge, edit for corrections."
     )
 
     if chosen_group == 'text_generation':
         writing_rules = (
             "\n\nWRITING TOOL PRIORITY RULES (text_generation group):"
-            "\n- If a source/reference file is available or the task says to base writing on existing material, call write_text_from_source first."
-            "\n- If revising an existing output file, call edit_text."
-            "\n- Use write_text only when no source file is available and the task is net-new writing."
+            "\n- Use write_text for net-new writing when no source file is required."
+            "\n- Use write_text_from_source when writing must be based on an existing source/reference file."
+            "\n- Use edit_text only to revise an existing output file."
             "\n- Prefer source-grounded writing over free-form writing when either can satisfy the subtask."
+            "\n- When practical, chain multiple calls (e.g., read_file -> write_text_from_source -> edit_text) for better quality."
         )
         return base + writing_rules
 
@@ -241,8 +246,9 @@ def build_selector_messages(subtask, all_results):
             f"Available groups:\n{group_list}\n\n"
             f"Selection rules:\n"
             f"- Choose text_generation for writing/editing tasks.\n"
-            f"- In text_generation, prefer write_text_from_source when source/reference material is available.\n"
-            f"- Use edit_text when revising an existing file, write_text for net-new writing without source material.\n\n"
+            f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
+            f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
+            f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
             f"Reply with the group name on the first line, then call the appropriate tools."
         )},
         {'role': 'user', 'content': "\n".join(context_parts)}
