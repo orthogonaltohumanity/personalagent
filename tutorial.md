@@ -19,7 +19,8 @@ pip install -r requirements.txt
 Edit `config.yaml` and check at least:
 
 - `models.planner`
-- `models.tool_selector`
+- `models.tool_group_chooser`
+- `models.tool_user`
 - `models.verifier`
 - `system_prompt_path`
 - `working_directory`
@@ -56,9 +57,10 @@ This uses `chat_model` from `config.yaml` (or falls back to planner model) and c
 The loop is:
 
 1. **Planner** creates subtasks.
-2. **Tool selector/executor** picks a tool group and runs tool calls.
-3. **Verifier** checks completeness.
-4. If incomplete or failed, the agent replans.
+2. **Tool group chooser** picks a tool group.
+3. **Tool user** runs tool calls within the chosen group.
+4. **Verifier** checks completeness.
+5. If incomplete or failed, the agent replans.
 
 ### Failure handling behavior
 
@@ -81,7 +83,7 @@ This reduces the chance of repeated first-subtask failures caused by error echoi
 
 ## 7) Troubleshooting
 
-- **No tool calls generated**: adjust model/tool-selector model or improve prompt specificity.
+- **No tool calls generated**: adjust the `tool_user` model or improve prompt specificity.
 - **Frequent timeouts**: increase timeout settings in `config.yaml`.
 - **Model errors**: verify Ollama is running and required models are pulled.
 - **TUI input issues**: run in legacy mode.

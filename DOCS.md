@@ -12,7 +12,9 @@ User Task
 [Planner] ── text-only, no tool calls ── produces numbered subtask list
     ↓                                      (includes memory recall/save as subtasks)
 For each subtask:
-    [Tool Selector] → picks group → calls tools → records results
+    [Tool Group Chooser] → picks group
+    ↓
+    [Tool User] → calls tools in chosen group → records results
     ↓
 [Verifier] → COMPLETE or INCOMPLETE
     ↓
@@ -42,8 +44,9 @@ downloads/           Downloaded PDFs and CSVs
 
 | Role | Default Model | Think | Purpose |
 |------|---------------|-------|---------|
-| planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list. Directs tool selector to search/save memory as subtasks. |
-| tool_selector | ministral-3:3b | no | Picks a tool group for each subtask, then calls up to 3 tools from that group |
+| planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list with suggested tool groups. |
+| tool_group_chooser | qwen3:1.7b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
+| tool_user | ministral-3:3b | no | Calls up to 3 tools from the chosen group for each subtask. |
 | verifier | qwen3:4b | yes | Reviews original task + all results, responds COMPLETE or INCOMPLETE |
 
 Configured in `config.yaml` under `models:`. Each model entry has a `think` flag for chain-of-thought mode. The planner receives NO tool schemas — it produces text only. This avoids compatibility issues with models that can't reliably handle thinking + tool calling together.
@@ -64,15 +67,15 @@ while True:
            + group summary (group names + descriptions, NO individual tool names)
        - Planner streams response via stream_ollama() with tools=None, think=True
        - No tool calls — planner is text-only
-       - Planner directs tool selector to search/save memory via subtasks
+       - Planner can suggest groups; execution is handled by tool group chooser + tool user
        - Text output is parsed into subtask list via parse_subtasks()
 
     2. EXECUTE PHASE (for each subtask)
        a. build_selector_messages() provides subtask + previous results + group list
-       b. Tool selector (non-streaming, no thinking) picks a group name
-       c. pick_group() extracts group name from selector output (first line match, then full scan)
+       b. Tool group chooser (non-streaming, no thinking) picks a group name
+       c. pick_group() extracts group name from chooser output (first line match, then full scan)
        d. If no group found → defaults to web_search
-       e. Second query to tool selector with group's tool schemas → generates tool calls
+       e. Second query to tool user with chosen group's tool schemas → generates tool calls
        f. execute_tool_calls() runs each call, records results
        g. Results accumulate — later subtasks see earlier results for context
 
@@ -95,20 +98,20 @@ while True:
 
 The planner is strictly text-only — it receives `tools=None` and cannot make tool calls. It sees tool group names and descriptions but **not individual tool names** (via `get_group_summary(include_tools=False)`). This prevents the model from hallucinating tool calls or getting confused between planning and executing.
 
-Memory operations (search_memory, save_memory) and user clarification (check_in) are handled as regular subtasks that the tool selector executes.
+Memory operations (search_memory, save_memory) and user clarification (check_in) are handled as regular subtasks that the tool user executes.
 
 ---
 
 ## Tool Groups
 
-Tools are organized into 9 groups. The tool selector picks ONE group per subtask, then calls tools from it. This forces clean task decomposition.
+Tools are organized into 9 groups. The tool group chooser picks ONE group per subtask, then the tool user calls tools from it. This forces clean task decomposition.
 
 | Group | Description | Tools |
 |-------|-------------|-------|
 | web_search | Search the web and download files | search_web, search_and_download_files |
 | social_media | Moltbook social media platform | 16 tools (posts, file-to-post, comments, votes, profiles, communities) |
 | document_processing | PDFs and CSVs | ingest_pdf, ingest_csv, query_documents, list_downloaded_files |
-| file_operations | Read/write files | read_file, edit |
+| file_operations | Read/write files | read_file, edit, list_working_files |
 | code_generation | AI code models | generate_code, generate_code_edit |
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
 | version_control | Git operations | git_init, git_status, git_add, git_commit, git_log, git_diff, git_diff_staged, git_branch, git_checkout, git_list_branches |
@@ -148,8 +151,11 @@ models:
   planner:
     model: "qwen3.5:9b"
     think: true              # chain-of-thought mode (model must support it)
-  tool_selector:
+  tool_group_chooser:
     model: "qwen3:1.7b"
+    think: false
+  tool_user:
+    model: "ministral-3:3b"
     think: false
   verifier:
     model: "qwen3:4b"
@@ -198,7 +204,7 @@ Ollama-only. Three functions:
 
 - **`build_tool_schemas(functions)`** — Inspects function signatures to generate Ollama tool schemas. Type annotations → JSON types, docstrings → descriptions, required params detected automatically.
 - **`stream_ollama(model, messages, tools, think, on_chunk)`** — Streaming chat. Returns `(thinking, content, tool_calls)`. Retries up to 2 times on Ollama errors — first retry drops tools so the model can still produce text. When `on_chunk` is set, tokens stream to the callback instead of stdout. Chunk types: `thinking_start`, `thinking`, `answer_start`, `content`.
-- **`query_ollama(model, messages, tools, think)`** — Non-streaming chat. Used by tool_selector for speed. Same retry logic. Returns `(thinking, content, tool_calls)`.
+- **`query_ollama(model, messages, tools, think)`** — Non-streaming chat. Used by tool_group_chooser and tool_user for speed. Same retry logic. Returns `(thinking, content, tool_calls)`.
 
 ---
 
@@ -236,7 +242,7 @@ Persistent key-value store in `memories.json`. Each entry:
 - `open_memory(key)` — direct access, updates timestamp
 - Saved to disk after each completed user task and whenever dirty
 
-The planner directs the tool selector to call memory tools as subtasks (e.g. "search memory for identity and goals", "save what we learned"). All memory tools are available to the executor via the memory tool group.
+The planner can suggest memory-focused subtasks (e.g. "search memory for identity and goals", "save what we learned"). All memory tools are available to the executor via the memory tool group.
 
 ---
 
@@ -360,7 +366,7 @@ The TUI's `on_stream_chunk` method updates `TUIState` and triggers a refresh.
 
 ### User Interaction in TUI
 
-When `check_in` is called (by the tool selector during execution), the question appears as a prompt in the TUI footer. The user types their response (visible in real-time), presses Enter, and the response is returned to the calling tool.
+When `check_in` is called (by the tool user during execution), the question appears as a prompt in the TUI footer. The user types their response (visible in real-time), presses Enter, and the response is returned to the calling tool.
 
 ### Plain Mode
 
@@ -377,7 +383,7 @@ python main.py --no-tui
 The system prompt is loaded fresh at the start of each user task and injected into both the planner and verifier messages. It defines:
 
 - **Identity** — the agent's personality (curious, resourceful, driven) and that identity persists through memory
-- **Loop structure** — PLANNER → TOOL SELECTOR → VERIFIER → re-plan
+- **Loop structure** — PLANNER → TOOL GROUP CHOOSER → TOOL USER → VERIFIER → re-plan
 - **Memory as identity** — what to remember (opinions, preferences, decisions, failures, user patterns)
 
 The system prompt is kept intentionally short (~6 lines) and role-neutral — it's shared by both planner and verifier. Role-specific instructions (e.g. "you are the PLANNER", "you are the VERIFIER") are appended by `build_planner_messages()` and `build_verifier_messages()` respectively. This keeps the prompt concise for small models (8-9B) that lose coherence with verbose instructions.

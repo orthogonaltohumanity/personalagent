@@ -33,7 +33,13 @@ def get_molt_client():
 _models_cfg = cfg['models']
 
 def get_model(role):
-    """Returns the model name for a given role (planner, tool_selector, verifier)."""
+    """Returns the model name for a given role."""
+    if role not in _models_cfg:
+        # Backward compatibility for older configs that still use tool_selector
+        if role in ('tool_group_chooser', 'tool_user') and 'tool_selector' in _models_cfg:
+            role = 'tool_selector'
+        else:
+            raise KeyError(f"Model role '{role}' not found in config.models")
     entry = _models_cfg[role]
     if isinstance(entry, dict):
         return entry['model']
@@ -41,6 +47,11 @@ def get_model(role):
 
 def get_model_think(role):
     """Returns whether a model supports think/CoT mode."""
+    if role not in _models_cfg:
+        if role in ('tool_group_chooser', 'tool_user') and 'tool_selector' in _models_cfg:
+            role = 'tool_selector'
+        else:
+            return False
     entry = _models_cfg[role]
     if isinstance(entry, dict):
         return entry.get('think', False)
