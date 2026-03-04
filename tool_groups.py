@@ -35,7 +35,7 @@ TOOL_GROUPS = {
         "tools": ["generate_code", "generate_code_edit"]
     },
     "text_generation": {
-        "description": "Generate or edit written text (articles, posts, essays, docs, creative writing) using a dedicated writing model",
+        "description": "Generate or edit written text; prefer source-grounded writing (write_text_from_source) and use edit_text for revisions",
         "tools": ["write_text", "edit_text", "write_text_from_source"]
     },
     "version_control": {

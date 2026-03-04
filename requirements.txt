@@ -1,0 +1,12 @@
+# Core model/runtime
+ollama>=0.1.8
+
+# Config and terminal UI
+PyYAML>=6.0
+rich>=13.7.0
+
+# Tools and integrations
+requests>=2.31.0
+ddgs>=8.0.0
+pypdf>=4.2.0
+moltbook>=0.0.6
