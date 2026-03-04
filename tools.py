@@ -398,6 +398,41 @@ def _imap_disconnect(conn):
         pass
 
 
+def _find_imap_tuple_part(msg_data):
+    """Returns the first tuple part from IMAP fetch results."""
+    for part in msg_data or []:
+        if isinstance(part, tuple):
+            return part
+    return None
+
+
+def _extract_email_payload(msg):
+    """Extracts text body from a message, preferring text/plain and ignoring attachments."""
+    if msg.is_multipart():
+        chunks = []
+        for part in msg.walk():
+            maintype = part.get_content_maintype()
+            disp = str(part.get('Content-Disposition') or '').lower()
+            if maintype != 'text' or 'attachment' in disp:
+                continue
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            charset = part.get_content_charset() or 'utf-8'
+            try:
+                chunks.append(payload.decode(charset, errors='replace'))
+            except LookupError:
+                chunks.append(payload.decode('utf-8', errors='replace'))
+        return '\n'.join([c for c in chunks if c]).strip()
+
+    payload = msg.get_payload(decode=True) or b''
+    charset = msg.get_content_charset() or 'utf-8'
+    try:
+        return payload.decode(charset, errors='replace').strip()
+    except LookupError:
+        return payload.decode('utf-8', errors='replace').strip()
+
+
 def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 10):
     '''Lists emails by category (unread/read/all) from a mailbox with sender, subject, date, and seen status.'''
     import email
@@ -444,13 +479,12 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
             status, msg_data = conn.fetch(mid, '(BODY.PEEK[HEADER] FLAGS)')
             if status != 'OK' or not msg_data:
                 continue
-            header_bytes = b''
-            flags_blob = ''
-            for part in msg_data:
-                if isinstance(part, tuple):
-                    if isinstance(part[1], bytes):
-                        header_bytes = part[1]
-                    flags_blob = str(part[0])
+
+            tuple_part = _find_imap_tuple_part(msg_data)
+            if tuple_part is None or not isinstance(tuple_part[1], bytes):
+                continue
+            header_bytes = tuple_part[1]
+            flags_blob = str(tuple_part[0])
             msg = email.message_from_bytes(header_bytes)
             seen = '\\Seen' in flags_blob
             result_rows.append({
@@ -499,30 +533,14 @@ def read_email(message_id: str, mailbox: str = 'INBOX'):
         if status != 'OK' or not msg_data:
             return {'error': f"Unable to fetch email id {message_id}"}
 
-        raw_msg = None
-        flags_blob = ''
-        for part in msg_data:
-            if isinstance(part, tuple):
-                if isinstance(part[1], bytes):
-                    raw_msg = part[1]
-                flags_blob = str(part[0])
-        if raw_msg is None:
+        tuple_part = _find_imap_tuple_part(msg_data)
+        if tuple_part is None or not isinstance(tuple_part[1], bytes):
             return {'error': f"No message payload for id {message_id}"}
+        raw_msg = tuple_part[1]
+        flags_blob = str(tuple_part[0])
 
         msg = email.message_from_bytes(raw_msg)
-        body = ''
-        if msg.is_multipart():
-            for part in msg.walk():
-                ctype = part.get_content_type()
-                disp = str(part.get('Content-Disposition') or '')
-                if ctype == 'text/plain' and 'attachment' not in disp.lower():
-                    payload = part.get_payload(decode=True) or b''
-                    charset = part.get_content_charset() or 'utf-8'
-                    body += payload.decode(charset, errors='replace')
-        else:
-            payload = msg.get_payload(decode=True) or b''
-            charset = msg.get_content_charset() or 'utf-8'
-            body = payload.decode(charset, errors='replace')
+        body = _extract_email_payload(msg)
 
         return {
             'id': message_id,
@@ -532,7 +550,7 @@ def read_email(message_id: str, mailbox: str = 'INBOX'):
             'subject': _decode_mime_header(msg.get('Subject', '')),
             'date': msg.get('Date', ''),
             'seen': '\\Seen' in flags_blob,
-            'body': body.strip()[:20000],
+            'body': body[:20000],
         }
     finally:
         _imap_disconnect(conn)
