@@ -139,7 +139,7 @@ def stream_ollama(model, messages, tools=None, think=True, on_chunk=None):
 
 def query_ollama(model, messages, tools=None, think=False):
     """
-    Non-streaming Ollama query. Used for tool_selector.
+    Non-streaming Ollama query. Used for tool_group_chooser and tool_user.
     Returns (thinking, content, tool_calls).
 
     Retries on failure. On first failure with tools, retries without tools.

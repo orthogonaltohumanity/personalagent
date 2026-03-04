@@ -12,7 +12,9 @@ User Task
 [Planner] ── text-only, no tool calls ── produces numbered subtask list
     ↓                                      (includes memory recall/save as subtasks)
 For each subtask:
-    [Tool Selector] → picks group → calls tools → records results
+    [Tool Group Chooser] → picks group
+    ↓
+    [Tool User] → calls tools in chosen group → records results
     ↓
 [Verifier] → COMPLETE or INCOMPLETE
     ↓
@@ -42,8 +44,9 @@ downloads/           Downloaded PDFs and CSVs
 
 | Role | Default Model | Think | Purpose |
 |------|---------------|-------|---------|
-| planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list. Directs tool selector to search/save memory as subtasks. |
-| tool_selector | ministral-3:3b | no | Picks a tool group for each subtask, then calls up to 3 tools from that group |
+| planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list with suggested tool groups. |
+| tool_group_chooser | qwen3:1.7b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
+| tool_user | ministral-3:3b | no | Calls up to 3 tools from the chosen group for each subtask. |
 | verifier | qwen3:4b | yes | Reviews original task + all results, responds COMPLETE or INCOMPLETE |
 
 Configured in `config.yaml` under `models:`. Each model entry has a `think` flag for chain-of-thought mode. The planner receives NO tool schemas — it produces text only. This avoids compatibility issues with models that can't reliably handle thinking + tool calling together.
@@ -108,7 +111,7 @@ Tools are organized into 9 groups. The tool selector picks ONE group per subtask
 | web_search | Search the web and download files | search_web, search_and_download_files |
 | social_media | Moltbook social media platform | 16 tools (posts, file-to-post, comments, votes, profiles, communities) |
 | document_processing | PDFs and CSVs | ingest_pdf, ingest_csv, query_documents, list_downloaded_files |
-| file_operations | Read/write files | read_file, edit |
+| file_operations | Read/write files | read_file, edit, list_working_files |
 | code_generation | AI code models | generate_code, generate_code_edit |
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
 | version_control | Git operations | git_init, git_status, git_add, git_commit, git_log, git_diff, git_diff_staged, git_branch, git_checkout, git_list_branches |
@@ -148,8 +151,11 @@ models:
   planner:
     model: "qwen3.5:9b"
     think: true              # chain-of-thought mode (model must support it)
-  tool_selector:
+  tool_group_chooser:
     model: "qwen3:1.7b"
+    think: false
+  tool_user:
+    model: "ministral-3:3b"
     think: false
   verifier:
     model: "qwen3:4b"
@@ -198,7 +204,7 @@ Ollama-only. Three functions:
 
 - **`build_tool_schemas(functions)`** — Inspects function signatures to generate Ollama tool schemas. Type annotations → JSON types, docstrings → descriptions, required params detected automatically.
 - **`stream_ollama(model, messages, tools, think, on_chunk)`** — Streaming chat. Returns `(thinking, content, tool_calls)`. Retries up to 2 times on Ollama errors — first retry drops tools so the model can still produce text. When `on_chunk` is set, tokens stream to the callback instead of stdout. Chunk types: `thinking_start`, `thinking`, `answer_start`, `content`.
-- **`query_ollama(model, messages, tools, think)`** — Non-streaming chat. Used by tool_selector for speed. Same retry logic. Returns `(thinking, content, tool_calls)`.
+- **`query_ollama(model, messages, tools, think)`** — Non-streaming chat. Used by tool_group_chooser and tool_user for speed. Same retry logic. Returns `(thinking, content, tool_calls)`.
 
 ---
 
