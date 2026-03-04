@@ -71,14 +71,22 @@ def parse_subtasks(text):
 
 
 def pick_group(selector_content):
-    """Parse a tool group name from the selector's response."""
+    """Parse a tool group name from the chooser's response.
+
+    Expected format is strict: first line should be either '[group_name]' or
+    'group_name'. This reduces accidental substring matches.
+    """
     first_line = selector_content.strip().split('\n')[0].strip().lower()
-    for gname in get_group_names():
-        if gname in first_line:
-            return gname
-    for gname in get_group_names():
-        if gname in selector_content.lower():
-            return gname
+
+    bracket_match = re.match(r'^\[([a-z_]+)\]$', first_line)
+    if bracket_match:
+        candidate = bracket_match.group(1)
+        if candidate in get_group_names():
+            return candidate
+
+    if first_line in get_group_names():
+        return first_line
+
     return None
 
 
@@ -224,7 +232,7 @@ def build_planner_messages(system_prompt, planning_input):
             f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
             f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
             f"RULES:\n"
-            f"- Provide each subtask with a suggested tool group inline when possible (e.g., '[web_search] Find ...').\n"
+            f"- REQUIRED FORMAT: every subtask must start with a bracketed tool group tag followed by an action, e.g., '[web_search] Find ...'.\n- Use exact group tags from the list below; do not invent new group names.\n"
             f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
             f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
             f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
@@ -263,10 +271,11 @@ def build_selector_messages(subtask, all_results):
     context_parts = [f"Current subtask: {subtask}"]
     recommended_group = None
     subtask_lower = subtask.lower()
-    for gname in get_group_names():
-        if f"[{gname}]" in subtask_lower or f"{gname}" in subtask_lower:
-            recommended_group = gname
-            break
+    tag_match = re.search(r'\[([a-z_]+)\]', subtask_lower)
+    if tag_match:
+        tagged = tag_match.group(1)
+        if tagged in get_group_names():
+            recommended_group = tagged
     if recommended_group:
         context_parts.append(f"Planner-recommended group: {recommended_group}")
     if all_results:
@@ -282,15 +291,14 @@ def build_selector_messages(subtask, all_results):
     )
     messages = [
         {'role': 'system', 'content': (
-            f"You are a tool group chooser. Given a subtask, pick the best tool group based on the planner's subtask description and any recommended group. "
-            f"then call up to {cfg['max_tools_per_task']} tools from that group to accomplish the subtask.\n\n"
+            f"You are a tool group chooser. Given a subtask, pick the best tool group based on the planner's subtask description and any recommended group.\n\n"
             f"Available groups:\n{group_list}\n\n"
             f"Selection rules:\n"
             f"- Choose text_generation for writing/editing tasks.\n"
             f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
             f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
             f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
-            f"Reply with the group name on the first line only. Do not call tools."
+            f"Reply with ONLY one line in this exact format: [group_name]. Do not call tools and do not add any other text."
         )},
         {'role': 'user', 'content': "\n".join(context_parts)}
     ]

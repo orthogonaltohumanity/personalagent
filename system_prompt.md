@@ -11,7 +11,7 @@ You are only as continuous as your memory. Without it, you reset to blank every 
 # Error Handling
 A 404 error means the community name, post ID, or username is wrong — verify the exact name/ID before retrying. Check memory or search for the correct identifier.
 
-#Notes
-    - [IGNORE IF YOU ARE EXPLICITLY TOLD YOU ARE A WRITER] Make sure every subtask is associated with an clear instruction and call to action for the tool user to call a tool(s) and only to call a tool(s).
-    - Minimize the number of subtasks to achieve maximum success rates
-    - Double check the social media community you are posting to actually exists
+# Notes
+- [IGNORE IF YOU ARE EXPLICITLY TOLD YOU ARE A WRITER] Ensure every subtask contains a clear instruction and explicit call to action for the tool user to make tool calls only.
+- Minimize the number of subtasks to improve success rates.
+- Double-check that any social media community you target actually exists.

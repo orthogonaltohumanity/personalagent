@@ -67,15 +67,15 @@ while True:
            + group summary (group names + descriptions, NO individual tool names)
        - Planner streams response via stream_ollama() with tools=None, think=True
        - No tool calls — planner is text-only
-       - Planner directs tool selector to search/save memory via subtasks
+       - Planner can suggest groups; execution is handled by tool group chooser + tool user
        - Text output is parsed into subtask list via parse_subtasks()
 
     2. EXECUTE PHASE (for each subtask)
        a. build_selector_messages() provides subtask + previous results + group list
-       b. Tool selector (non-streaming, no thinking) picks a group name
-       c. pick_group() extracts group name from selector output (first line match, then full scan)
+       b. Tool group chooser (non-streaming, no thinking) picks a group name
+       c. pick_group() extracts group name from chooser output (first line match, then full scan)
        d. If no group found → defaults to web_search
-       e. Second query to tool selector with group's tool schemas → generates tool calls
+       e. Second query to tool user with chosen group's tool schemas → generates tool calls
        f. execute_tool_calls() runs each call, records results
        g. Results accumulate — later subtasks see earlier results for context
 
@@ -98,13 +98,13 @@ while True:
 
 The planner is strictly text-only — it receives `tools=None` and cannot make tool calls. It sees tool group names and descriptions but **not individual tool names** (via `get_group_summary(include_tools=False)`). This prevents the model from hallucinating tool calls or getting confused between planning and executing.
 
-Memory operations (search_memory, save_memory) and user clarification (check_in) are handled as regular subtasks that the tool selector executes.
+Memory operations (search_memory, save_memory) and user clarification (check_in) are handled as regular subtasks that the tool user executes.
 
 ---
 
 ## Tool Groups
 
-Tools are organized into 9 groups. The tool selector picks ONE group per subtask, then calls tools from it. This forces clean task decomposition.
+Tools are organized into 9 groups. The tool group chooser picks ONE group per subtask, then the tool user calls tools from it. This forces clean task decomposition.
 
 | Group | Description | Tools |
 |-------|-------------|-------|
@@ -242,7 +242,7 @@ Persistent key-value store in `memories.json`. Each entry:
 - `open_memory(key)` — direct access, updates timestamp
 - Saved to disk after each completed user task and whenever dirty
 
-The planner directs the tool selector to call memory tools as subtasks (e.g. "search memory for identity and goals", "save what we learned"). All memory tools are available to the executor via the memory tool group.
+The planner can suggest memory-focused subtasks (e.g. "search memory for identity and goals", "save what we learned"). All memory tools are available to the executor via the memory tool group.
 
 ---
 
@@ -366,7 +366,7 @@ The TUI's `on_stream_chunk` method updates `TUIState` and triggers a refresh.
 
 ### User Interaction in TUI
 
-When `check_in` is called (by the tool selector during execution), the question appears as a prompt in the TUI footer. The user types their response (visible in real-time), presses Enter, and the response is returned to the calling tool.
+When `check_in` is called (by the tool user during execution), the question appears as a prompt in the TUI footer. The user types their response (visible in real-time), presses Enter, and the response is returned to the calling tool.
 
 ### Plain Mode
 
@@ -383,7 +383,7 @@ python main.py --no-tui
 The system prompt is loaded fresh at the start of each user task and injected into both the planner and verifier messages. It defines:
 
 - **Identity** — the agent's personality (curious, resourceful, driven) and that identity persists through memory
-- **Loop structure** — PLANNER → TOOL SELECTOR → VERIFIER → re-plan
+- **Loop structure** — PLANNER → TOOL GROUP CHOOSER → TOOL USER → VERIFIER → re-plan
 - **Memory as identity** — what to remember (opinions, preferences, decisions, failures, user patterns)
 
 The system prompt is kept intentionally short (~6 lines) and role-neutral — it's shared by both planner and verifier. Role-specific instructions (e.g. "you are the PLANNER", "you are the VERIFIER") are appended by `build_planner_messages()` and `build_verifier_messages()` respectively. This keeps the prompt concise for small models (8-9B) that lose coherence with verbose instructions.
