@@ -283,7 +283,6 @@ def search_web(text: str):
         'result_count': len(results),
         'results': results,
     }
-<<<<<<< codex/update-save-websearch-results-and-memory-management-t43x6u
 
 
 def check_connectivity(host: str = '8.8.8.8', count: int = 1, timeout_seconds: int = 2):
@@ -557,8 +556,6 @@ def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
         return {'status': 'ok', 'id': message_id, 'seen': seen, 'mailbox': mailbox}
     finally:
         _imap_disconnect(conn)
-=======
->>>>>>> main
 
 
 _SUPPORTED_FILETYPES = {
