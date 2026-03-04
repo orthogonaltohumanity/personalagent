@@ -1,0 +1,45 @@
+# Models — one per role
+# think: whether the model supports /think mode (qwen3 does, hermes3 does not)
+models:
+  planner:
+    model: "qwen3.5:9b"
+    think: true
+  tool_selector:
+    model: "ministral-3:3b"
+    think: false
+  verifier:
+    model: "qwen3:4b"
+    think: true
+
+# Code generation model (used by generate_code tools)
+code_model: "qwen2.5-coder:7b"
+code_model_fallback: "qwen2.5-coder:7b"
+
+# Embeddings
+embedding_model: "embeddinggemma"
+
+# Tool group constraints
+max_tools_per_task: 3          # Max tools selected from a group per subtask
+max_subtasks: 20                # Max subtasks before forcing re-evaluation
+max_verification_loops: 20       # Max times verifier can send back to planner before asking user
+
+# Context
+ollama_context_window: 32768
+
+# Limits
+max_tool_calls_per_step: 10
+subtask_timeout_seconds: 300    # Per-subtask timeout (5 minutes)
+download_subtask_timeout_seconds: 900  # Timeout for download/ingest subtasks (15 minutes)
+max_web_search_results: 5
+max_download_search_results: 10
+download_timeout_seconds: 15
+
+# Paths
+working_directory: "Playground/"
+downloads_directory: "downloads"
+pdf_index_path: "pdf_index.json"
+memories_path: "memories.json"
+system_prompt_path: "system_prompt.md"
+
+# Agent defaults
+short_term_goal: "Short Term Goal Not Given. To Be Determined"
