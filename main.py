@@ -4,7 +4,7 @@ import sys
 import time
 import threading
 
-from config import cfg, get_model, get_model_think
+from config import cfg, get_model, get_model_think, resolve_path
 from state import state
 from tools import build_tool_registry, available_functions, set_log_callback, set_input_callback, set_stream_callback
 from tool_groups import get_group_summary, get_tools_in_group, get_group_names, TOOL_GROUPS
@@ -41,8 +41,12 @@ def run_with_timeout(fn, timeout_seconds):
 
 
 def load_system_prompt():
-    with open(cfg['system_prompt_path'], 'r') as f:
-        return f.read()
+    system_prompt_path = resolve_path(cfg['system_prompt_path'])
+    try:
+        with open(system_prompt_path, 'r') as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 def parse_subtasks(text):

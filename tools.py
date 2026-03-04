@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 from ollama import generate as ollama_generate, embed as ollama_embed, chat as ollama_chat
 
-from config import cfg, get_molt_client, get_code_model, get_model
+from config import cfg, get_molt_client, get_code_model, get_model, resolve_path
 from state import state
 
 
@@ -94,6 +94,28 @@ def _stream_chat(model, messages, label="Generating"):
     if not _stream_callback:
         print()
     return content
+
+
+def _work_path(filename: str):
+    """Build an absolute path under the working directory."""
+    return os.path.join(state.working_directory, filename)
+
+
+def _ensure_parent_dir(path: str):
+    """Create parent directory for a file path when needed."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def _load_system_prompt_text():
+    """Load system prompt from configured path, tolerant of missing files."""
+    try:
+        with open(resolve_path(cfg.get('system_prompt_path', 'system_prompt.md')), 'r') as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
 
 
 # ── Memory ───────────────────────────────────────────────────────────────────
@@ -244,7 +266,7 @@ def search_and_download_files(query: str, filetype: str = "pdf"):
     if filetype not in _SUPPORTED_FILETYPES:
         return f"Unsupported filetype '{filetype}'. Supported: {list(_SUPPORTED_FILETYPES.keys())}"
     ft = _SUPPORTED_FILETYPES[filetype]
-    output_dir = cfg['downloads_directory']
+    output_dir = str(resolve_path(cfg['downloads_directory']))
     os.makedirs(output_dir, exist_ok=True)
     from ddgs import DDGS
     import requests
@@ -391,7 +413,7 @@ def list_downloaded_files():
     '''Lists all downloaded files (PDFs, CSVs) in the downloads and pdfs directories.'''
     supported_ext = ('.pdf', '.csv')
     found = []
-    for directory in (cfg['downloads_directory'], "pdfs"):
+    for directory in (str(resolve_path(cfg['downloads_directory'])), str(resolve_path('pdfs'))):
         try:
             for filename in os.listdir(directory):
                 if filename.lower().endswith(supported_ext):
@@ -412,27 +434,29 @@ def list_downloaded_files():
 def read_file(file: str):
     '''Reads a file from the working directory'''
     try:
-        with open(f"{state.working_directory}{file}", 'r') as f:
+        with open(_work_path(file), 'r') as f:
             return f.read()
     except Exception as e:
-        return e
+        return f"Error: {e}"
 
 
 def edit(file: str, append: bool, text: str):
     '''Writes 'text' to a file in the working directory; append=True to append'''
     mode = 'a' if append else 'w'
     try:
-        with open(f"{state.working_directory}{file}", mode) as f:
+        filepath = _work_path(file)
+        _ensure_parent_dir(filepath)
+        with open(filepath, mode) as f:
             f.write(text)
         action = 'Appended to' if append else 'Wrote'
         return f'{action} {file} ({len(text)} chars)'
     except Exception as e:
-        return e
+        return f"Error: {e}"
 
 
 # ── Dynamic tool creation ────────────────────────────────────────────────────
 
-CUSTOM_TOOLS_PATH = cfg.get('custom_tools_path', 'custom_tools.json')
+CUSTOM_TOOLS_PATH = str(resolve_path(cfg.get('custom_tools_path', 'custom_tools.json')))
 TOOL_APPROVAL_TIMEOUT = cfg.get('tool_approval_timeout', 60)
 
 _custom_tool_registry = []  # in-memory list of {name, description, code}
@@ -472,6 +496,7 @@ def load_custom_tools():
 
 def _save_custom_tools():
     saved = [{'name': e['name'], 'description': e['description'], 'code': e['code']} for e in _custom_tool_registry]
+    _ensure_parent_dir(CUSTOM_TOOLS_PATH)
     with open(CUSTOM_TOOLS_PATH, 'w') as f:
         json.dump(saved, f, indent=2)
 
@@ -565,12 +590,7 @@ def write_text(filename: str, prompt: str):
             memory_context = f"\n\nRelevant memories:\n{mem_results}\n"
 
     # Load system prompt
-    system_prompt = ""
-    try:
-        with open(cfg.get('system_prompt_path', 'system_prompt.md'), 'r') as f:
-            system_prompt = f.read()
-    except FileNotFoundError:
-        pass
+    system_prompt = _load_system_prompt_text()
 
     messages = [
         {'role': 'system', 'content': (
@@ -604,8 +624,8 @@ def write_text(filename: str, prompt: str):
 
     text = result_box[0] or ""
 
-    filepath = os.path.join(state.working_directory, filename)
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    filepath = _work_path(filename)
+    _ensure_parent_dir(filepath)
     with open(filepath, 'w') as f:
         f.write(text)
     return f"Generated with {model} (memory-aware) and saved to {filepath} ({len(text)} chars)"
@@ -613,7 +633,7 @@ def write_text(filename: str, prompt: str):
 
 def edit_text(filename: str, prompt: str):
     '''Reads an existing text file from the working directory, sends it with editing instructions to the planner model with memory context, and overwrites the file. Use this to revise, expand, rewrite, or otherwise modify existing non-code text.'''
-    filepath = os.path.join(state.working_directory, filename)
+    filepath = _work_path(filename)
     try:
         with open(filepath, 'r') as f:
             existing = f.read()
@@ -630,12 +650,7 @@ def edit_text(filename: str, prompt: str):
             memory_context = f"\n\nRelevant memories:\n{mem_results}\n"
 
     # Load system prompt
-    system_prompt = ""
-    try:
-        with open(cfg.get('system_prompt_path', 'system_prompt.md'), 'r') as f:
-            system_prompt = f.read()
-    except FileNotFoundError:
-        pass
+    system_prompt = _load_system_prompt_text()
 
     messages = [
         {'role': 'system', 'content': (
@@ -681,7 +696,7 @@ def edit_text(filename: str, prompt: str):
 
 def write_text_from_source(filename: str, source_filename: str, prompt: str):
     '''Reads a source file as reference material and generates NEW text in a separate output file. Essential for multi-stage writing pipelines: outline → draft → polished work. Use this to build upon existing text — e.g. turn an outline into a full draft, expand notes into an article, transform bullet points into prose, or write a response based on source material. The source file is NOT modified.'''
-    source_path = os.path.join(state.working_directory, source_filename)
+    source_path = _work_path(source_filename)
     try:
         with open(source_path, 'r') as f:
             source_content = f.read()
@@ -701,12 +716,7 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
             memory_context = f"\n\nRelevant memories:\n{mem_results}\n"
 
     # Load system prompt
-    system_prompt = ""
-    try:
-        with open(cfg.get('system_prompt_path', 'system_prompt.md'), 'r') as f:
-            system_prompt = f.read()
-    except FileNotFoundError:
-        pass
+    system_prompt = _load_system_prompt_text()
 
     messages = [
         {'role': 'system', 'content': (
@@ -744,8 +754,8 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
 
     text = result_box[0] or ""
 
-    filepath = os.path.join(state.working_directory, filename)
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    filepath = _work_path(filename)
+    _ensure_parent_dir(filepath)
     with open(filepath, 'w') as f:
         f.write(text)
     return f"Generated with {model} (memory-aware, source: {source_filename}) and saved to {filepath} ({len(text)} chars)"
@@ -756,8 +766,8 @@ def generate_code(filename: str, prompt: str):
     code_model = get_code_model()
     raw = _stream_generate(code_model, prompt, label=f"Generating code for {filename}")
     text = _extract_code_from_response(raw)
-    filepath = os.path.join(state.working_directory, filename)
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    filepath = _work_path(filename)
+    _ensure_parent_dir(filepath)
     with open(filepath, 'w') as f:
         f.write(text)
     return f"Generated with {code_model} and saved to {filepath} ({len(text)} chars)"
@@ -765,7 +775,7 @@ def generate_code(filename: str, prompt: str):
 
 def generate_code_edit(filename: str, prompt: str):
     '''Reads an existing file from the working directory, sends it with 'prompt' to the code model for modification, and overwrites the file. Does NOT execute the code.'''
-    filepath = os.path.join(state.working_directory, filename)
+    filepath = _work_path(filename)
     try:
         with open(filepath, 'r') as f:
             existing = f.read()
@@ -785,7 +795,7 @@ def generate_code_edit(filename: str, prompt: str):
 def _git(args):
     result = subprocess.run(
         ['git'] + args,
-        cwd=state.working_directory,
+        cwd=str(state.working_directory),
         capture_output=True, text=True, timeout=30
     )
     return (result.stdout + result.stderr).strip()
@@ -886,7 +896,7 @@ def create_social_media_post(community: str, title: str, body: str):
 
 def post_file_to_social_media(community: str, title: str, filename: str):
     '''Reads a file from the working directory and posts its contents to a Moltbook community. The file contents become the post body.'''
-    filepath = os.path.join(state.working_directory, filename)
+    filepath = _work_path(filename)
     try:
         with open(filepath, 'r') as f:
             body = f.read()
