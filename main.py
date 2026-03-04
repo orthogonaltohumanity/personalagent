@@ -50,24 +50,48 @@ def load_system_prompt():
 
 
 def parse_subtasks(text):
-    """Parse a numbered list or JSON subtask list from planner output."""
+    """Parse planner output into a clean subtask list.
+
+    Accepts JSON (`{"subtasks": [...]}` or list), numbered/bulleted text,
+    and strict bracket-tag lines like `[web_search] ...`.
+    """
+    if not text:
+        return []
+
+    normalized = text.strip()
+
+    # Strip optional fenced code wrapper if the model returns markdown.
+    fence_match = re.match(r"^```(?:json|text)?\s*(.*?)\s*```$", normalized, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        normalized = fence_match.group(1).strip()
+
     try:
-        data = json.loads(text)
+        data = json.loads(normalized)
         if isinstance(data, dict) and 'subtasks' in data:
-            return data['subtasks']
+            return [str(s).strip() for s in data['subtasks'] if str(s).strip()]
         if isinstance(data, list):
-            return data
+            return [str(s).strip() for s in data if str(s).strip()]
     except (json.JSONDecodeError, TypeError):
         pass
 
-    lines = text.strip().split('\n')
+    lines = normalized.split('\n')
     subtasks = []
     for line in lines:
         line = line.strip()
+        if not line:
+            continue
+
+        # Preferred strict planner format: [group] Action
+        if re.match(r'^\[[a-z_]+\]\s+.+', line, re.IGNORECASE):
+            subtasks.append(line)
+            continue
+
         match = re.match(r'^(?:\d+[\.\)]\s*|[-*]\s+)(.+)', line)
         if match:
             subtasks.append(match.group(1).strip())
-    return subtasks if subtasks else [text.strip()]
+
+    # Fallback: keep non-empty text as single subtask.
+    return subtasks if subtasks else [normalized]
 
 
 def pick_group(selector_content):
