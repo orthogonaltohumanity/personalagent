@@ -116,23 +116,60 @@ def parse_subtasks(text):
 
 
 def pick_group(selector_content):
-    """Parse a tool group name from the chooser's response.
+    """Parse a tool group name from chooser output.
 
-    Expected format is strict: first line should be either '[group_name]' or
-    'group_name'. This reduces accidental substring matches.
+    Keep parsing intentionally narrow so chooser model output quality matters.
+    Accept only explicit bracket/token forms (with optional JSON/fence wrappers).
     """
-    first_line = selector_content.strip().split('\n')[0].strip().lower()
+    if not selector_content:
+        return None
 
+    valid_groups = set(get_group_names())
+    raw = selector_content.strip()
+
+    # Strip markdown fence wrappers.
+    fence_match = re.match(r"^```(?:json|text)?\s*(.*?)\s*```$", raw, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        raw = fence_match.group(1).strip()
+
+    # JSON fallback: {"group": "web_search"}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            for key in ('group', 'group_name', 'tool_group'):
+                value = parsed.get(key)
+                if isinstance(value, str) and value.strip().lower() in valid_groups:
+                    return value.strip().lower()
+        elif isinstance(parsed, str) and parsed.strip().lower() in valid_groups:
+            return parsed.strip().lower()
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    lines = [ln.strip().lower() for ln in raw.split('\n') if ln.strip()]
+    if not lines:
+        return None
+
+    first_line = lines[0]
     bracket_match = re.match(r'^\[([a-z_]+)\]$', first_line)
-    if bracket_match:
-        candidate = bracket_match.group(1)
-        if candidate in get_group_names():
-            return candidate
+    if bracket_match and bracket_match.group(1) in valid_groups:
+        return bracket_match.group(1)
 
-    if first_line in get_group_names():
-        return first_line
+    token_match = re.match(r'^([a-z_]+)$', first_line)
+    if token_match and token_match.group(1) in valid_groups:
+        return token_match.group(1)
 
     return None
+
+
+def extract_group_tag_from_subtask(subtask):
+    """Extract planner-provided [group] tag from a subtask string."""
+    if not subtask:
+        return None
+    match = re.search(r'\[([a-z_]+)\]', subtask.lower())
+    if not match:
+        return None
+    group = match.group(1)
+    return group if group in set(get_group_names()) else None
 
 
 def execute_tool_calls(tool_calls, group_name, tui=None):
@@ -481,8 +518,28 @@ def main_tui():
 
                     chosen_group = pick_group(selector_content)
                     if not chosen_group:
-                        tui.state.add_log(f"Could not determine group, defaulting to web_search")
-                        chosen_group = 'web_search'
+                        repair_messages = selector_messages + [
+                            {
+                                'role': 'user',
+                                'content': (
+                                    "Your prior response was unparsable. Reply with ONLY one line exactly like "
+                                    "[group_name], where group_name is one of the available groups."
+                                )
+                            }
+                        ]
+                        _, retry_selector_content, _ = query_ollama(
+                            get_model('tool_group_chooser'), repair_messages, think=False
+                        )
+                        chosen_group = pick_group(retry_selector_content)
+
+                    if not chosen_group:
+                        planner_group = extract_group_tag_from_subtask(subtask)
+                        if planner_group:
+                            chosen_group = planner_group
+                            tui.state.add_log(f"Chooser unparsable; using planner tag: {chosen_group}")
+                        else:
+                            tui.state.add_log(f"Could not determine group, defaulting to web_search")
+                            chosen_group = 'web_search'
 
                     tui.set_subtask_group(i, chosen_group)
                     tui.state.add_log(f"Group: {chosen_group}")
@@ -691,8 +748,28 @@ def main_legacy():
 
                 chosen_group = pick_group(selector_content)
                 if not chosen_group:
-                    print(f"  Could not determine group, defaulting to web_search")
-                    chosen_group = 'web_search'
+                    repair_messages = selector_messages + [
+                        {
+                            'role': 'user',
+                            'content': (
+                                "Your prior response was unparsable. Reply with ONLY one line exactly like "
+                                "[group_name], where group_name is one of the available groups."
+                            )
+                        }
+                    ]
+                    _, retry_selector_content, _ = query_ollama(
+                        get_model('tool_group_chooser'), repair_messages, think=False
+                    )
+                    chosen_group = pick_group(retry_selector_content)
+
+                if not chosen_group:
+                    planner_group = extract_group_tag_from_subtask(subtask)
+                    if planner_group:
+                        chosen_group = planner_group
+                        print(f"  Chooser unparsable; using planner tag: {chosen_group}")
+                    else:
+                        print(f"  Could not determine group, defaulting to web_search")
+                        chosen_group = 'web_search'
                 print(f"  Selected group: {chosen_group}")
 
                 group_tools = get_tools_in_group(chosen_group)
