@@ -377,14 +377,20 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
 
-    if category.lower() == 'unread':
+    category_value = str(category or 'unread').strip().lower()
+    if category_value == 'unread':
         criteria = '(UNSEEN)'
-    elif category.lower() == 'read':
+    elif category_value == 'read':
         criteria = '(SEEN)'
-    else:
+    elif category_value == 'all':
         criteria = 'ALL'
+    else:
+        return {'error': "category must be one of: unread, read, all"}
 
-    limit = max(1, int(limit))
+    try:
+        limit = max(1, int(limit))
+    except (TypeError, ValueError):
+        return {'error': 'limit must be an integer'}
     result_rows = []
 
     conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
@@ -423,7 +429,7 @@ def list_emails(category: str = 'unread', mailbox: str = 'INBOX', limit: int = 1
 
         return {
             'mailbox': mailbox,
-            'category': category,
+            'category': category_value,
             'count': len(result_rows),
             'emails': result_rows,
         }
@@ -441,6 +447,10 @@ def read_email(message_id: str, mailbox: str = 'INBOX'):
     missing = [k for k in required if not settings.get(k)]
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
+
+    message_id = str(message_id).strip()
+    if not message_id:
+        return {'error': 'message_id is required'}
 
     conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
     try:
@@ -512,6 +522,8 @@ def send_email(to: str, subject: str, body: str, cc: str = '', bcc: str = ''):
     msg.set_content(body)
 
     recipients = [e.strip() for e in (to + ',' + cc + ',' + bcc).split(',') if e.strip()]
+    if not recipients:
+        return {'error': 'At least one recipient is required'}
 
     with smtplib.SMTP(settings['smtp_server'], settings['smtp_port'], timeout=30) as server:
         server.ehlo()
@@ -542,6 +554,10 @@ def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
     if missing:
         return {'error': f"Missing email env vars for IMAP: {', '.join(missing)}"}
 
+    message_id = str(message_id).strip()
+    if not message_id:
+        return {'error': 'message_id is required'}
+
     conn = imaplib.IMAP4_SSL(settings['imap_server'], settings['imap_port'])
     try:
         conn.login(settings['username'], settings['password'])
@@ -556,6 +572,7 @@ def mark_email_seen(message_id: str, seen: bool = True, mailbox: str = 'INBOX'):
         return {'status': 'ok', 'id': message_id, 'seen': seen, 'mailbox': mailbox}
     finally:
         _imap_disconnect(conn)
+
 
 
 _SUPPORTED_FILETYPES = {
