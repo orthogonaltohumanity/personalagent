@@ -86,43 +86,61 @@ def execute_tool_calls(tool_calls, group_name, tui=None):
     """Execute tool calls. Returns list of (fn_name, fn_args, result) tuples."""
     results = []
     max_calls = cfg.get('max_tool_calls_per_step', 10)
-    for tc in tool_calls[:max_calls]:
-        if isinstance(tc, dict):
-            fn_name = tc['function']['name']
-            fn_args = tc['function']['arguments']
-        else:
-            fn_name = tc.function.name
-            fn_args = tc.function.arguments
+    try:
+        for tc in tool_calls[:max_calls]:
+            if isinstance(tc, dict):
+                fn_name = tc['function']['name']
+                fn_args = tc['function']['arguments']
+            else:
+                fn_name = tc.function.name
+                fn_args = tc.function.arguments
 
-        if isinstance(fn_args, str):
-            try:
-                fn_args = json.loads(fn_args)
-            except json.JSONDecodeError:
-                fn_args = {}
+            if isinstance(fn_args, str):
+                try:
+                    fn_args = json.loads(fn_args)
+                except json.JSONDecodeError:
+                    fn_args = {}
 
-        if fn_name in available_functions:
-            if tui:
-                tui.state.add_log(f"Calling {fn_name}({fn_args})")
-                tui._refresh()
+            if fn_name in available_functions:
+                if tui:
+                    tui.state.add_log(f"Calling {fn_name}({fn_args})")
+                    tui._refresh()
+                else:
+                    print(f"  Calling {fn_name}({fn_args})")
+                try:
+                    result = available_functions[fn_name](**fn_args)
+                except Exception as e:
+                    result = f"Error: {e}"
+                result_str = str(result)
+                results.append((fn_name, fn_args, result_str))
+                if tui:
+                    tui.record_tool_call(fn_name, fn_args, result_str[:300])
+                else:
+                    print(f"    -> {result_str[:300]}")
             else:
-                print(f"  Calling {fn_name}({fn_args})")
-            try:
-                result = available_functions[fn_name](**fn_args)
-            except Exception as e:
-                result = f"Error: {e}"
-            result_str = str(result)
-            results.append((fn_name, fn_args, result_str))
-            if tui:
-                tui.record_tool_call(fn_name, fn_args, result_str[:300])
-            else:
-                print(f"    -> {result_str[:300]}")
-        else:
-            msg = f"Tool '{fn_name}' not found, skipping"
-            if tui:
-                tui.state.add_log(msg)
-            else:
-                print(f"  {msg}")
+                msg = f"Tool '{fn_name}' not found, skipping"
+                if tui:
+                    tui.state.add_log(msg)
+                else:
+                    print(f"  {msg}")
+    finally:
+        state.save_memories_if_dirty()
     return results
+
+
+def get_planner_memory_context():
+    """Preload planner context with fixed identity/personality memory query."""
+    query = "identity personality preferences goals"
+    search_memory = available_functions.get('search_memory')
+    if not search_memory:
+        return ""
+    try:
+        memory_context = search_memory(query=query, top_k=3)
+    except Exception:
+        return ""
+    if not memory_context or memory_context in ("No memories stored yet.", "No memories found."):
+        return ""
+    return f"\n\nPreloaded memory recall ({query}):\n{memory_context}"
 
 
 def detect_subtask_failure(results):
@@ -182,16 +200,17 @@ def build_retry_planning_input(user_task, failure_reason, all_results):
 
 def build_planner_messages(system_prompt, planning_input):
     group_summary = get_group_summary(include_tools=False)
+    memory_context = get_planner_memory_context()
     return [
         {'role': 'system', 'content': (
             f"{system_prompt}\n\n"
             f"WORKING DIRECTORY: {state.working_directory}\n"
             f"Short term goal: {state.short_term_goal}\n\n"
+            f"Use this preloaded memory context when relevant:{memory_context}\n\n"
             f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
             f"You do NOT call tools, write code, or perform tasks. A separate TOOL SELECTOR executes your plan.\n\n"
             f"RULES:\n"
-            f"- First subtask should always be a memory recall (search_memory for identity, goals, context).\n"
-            f"- Include at least one dedicated memory-saving subtask near the end (save_memory) for durable findings, decisions, and outputs.\n"
+            f"- Provide each subtask with a suggested tool group inline when possible (e.g., '[web_search] Find ...').\n"
             f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
             f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
             f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
@@ -206,7 +225,7 @@ def build_planner_messages(system_prompt, planning_input):
 def build_tool_executor_system_prompt(chosen_group):
     """System prompt for tool execution, with writing-tool guidance."""
     base = (
-        f"You are a tool executor. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
+        f"You are the tool user. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
         f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
         f"Use up to {cfg['max_tools_per_task']} tool calls. Prefer 2+ tool calls when they improve quality (e.g., retrieve then write/save). "
         f"Use memory tools distinctly: search/open for recall, save for new durable knowledge, edit for corrections."
@@ -228,6 +247,14 @@ def build_tool_executor_system_prompt(chosen_group):
 
 def build_selector_messages(subtask, all_results):
     context_parts = [f"Current subtask: {subtask}"]
+    recommended_group = None
+    subtask_lower = subtask.lower()
+    for gname in get_group_names():
+        if f"[{gname}]" in subtask_lower or f"{gname}" in subtask_lower:
+            recommended_group = gname
+            break
+    if recommended_group:
+        context_parts.append(f"Planner-recommended group: {recommended_group}")
     if all_results:
         context_parts.append("\nPrevious subtask results:")
         for prev_task, prev_results in all_results:
@@ -241,7 +268,7 @@ def build_selector_messages(subtask, all_results):
     )
     messages = [
         {'role': 'system', 'content': (
-            f"You are a tool selector. Given a subtask, first pick the best tool group, "
+            f"You are a tool group chooser. Given a subtask, pick the best tool group based on the planner's subtask description and any recommended group. "
             f"then call up to {cfg['max_tools_per_task']} tools from that group to accomplish the subtask.\n\n"
             f"Available groups:\n{group_list}\n\n"
             f"Selection rules:\n"
@@ -249,7 +276,7 @@ def build_selector_messages(subtask, all_results):
             f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
             f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
             f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
-            f"Reply with the group name on the first line, then call the appropriate tools."
+            f"Reply with the group name on the first line only. Do not call tools."
         )},
         {'role': 'user', 'content': "\n".join(context_parts)}
     ]
@@ -285,7 +312,7 @@ def build_verifier_messages(system_prompt, user_task, all_results):
 
 def main_tui():
     tui = AgentTUI(
-        models={r: get_model(r) for r in ('planner', 'tool_selector', 'verifier')},
+        models={r: get_model(r) for r in ('planner', 'tool_group_chooser', 'tool_user', 'verifier')},
         max_loops=cfg['max_verification_loops']
     )
 
@@ -298,7 +325,8 @@ def main_tui():
     tui.set_status("Type a task below and press Enter")
     tui.state.add_log("Agent started")
     tui.state.add_log(f"Planner: {get_model('planner')}")
-    tui.state.add_log(f"Tool Selector: {get_model('tool_selector')}")
+    tui.state.add_log(f"Tool Group Chooser: {get_model('tool_group_chooser')}")
+    tui.state.add_log(f"Tool User: {get_model('tool_user')}")
     tui.state.add_log(f"Verifier: {get_model('verifier')}")
 
     try:
@@ -342,7 +370,7 @@ def main_tui():
                 tui.state.add_log(f"Plan: {len(subtasks)} subtask(s)")
 
                 # ── EXECUTE PHASE ─────────────────────────────────────
-                tui.set_phase(Phase.EXECUTING, get_model('tool_selector'))
+                tui.set_phase(Phase.EXECUTING, get_model('tool_group_chooser'))
 
                 all_results = []
                 execution_failed = False
@@ -360,7 +388,7 @@ def main_tui():
                     # ── Group selection (fast, no timeout needed) ──
                     selector_messages, context_parts = build_selector_messages(subtask, all_results)
                     _, selector_content, _ = query_ollama(
-                        get_model('tool_selector'), selector_messages, think=False
+                        get_model('tool_group_chooser'), selector_messages, think=False
                     )
 
                     chosen_group = pick_group(selector_content)
@@ -370,6 +398,7 @@ def main_tui():
 
                     tui.set_subtask_group(i, chosen_group)
                     tui.state.add_log(f"Group: {chosen_group}")
+                    tui.state.add_log(f"Tool user model: {get_model('tool_user')}")
 
                     group_tools = get_tools_in_group(chosen_group)
                     if not group_tools:
@@ -381,6 +410,7 @@ def main_tui():
                         break
 
                     # ── Tool execution (timeout-wrapped) ──
+                    tui.set_phase(Phase.EXECUTING, get_model('tool_user'))
                     timeout = download_timeout if chosen_group in slow_groups else default_timeout
 
                     def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
@@ -389,7 +419,7 @@ def main_tui():
                             {'role': 'user', 'content': "\n".join(_context_parts)}
                         ]
                         _, _, tool_calls = query_ollama(
-                            get_model('tool_selector'), tool_messages,
+                            get_model('tool_user'), tool_messages,
                             tools=_group_tools, think=False
                         )
                         if not tool_calls:
@@ -507,7 +537,8 @@ def main_legacy():
     print("  Planner -> Executor -> Verifier")
     print("=" * 60)
     print(f"  Planner:       {get_model('planner')}")
-    print(f"  Tool Selector: {get_model('tool_selector')}")
+    print(f"  Tool Group Chooser: {get_model('tool_group_chooser')}")
+    print(f"  Tool User:          {get_model('tool_user')}")
     print(f"  Verifier:      {get_model('verifier')}")
     print("=" * 60)
 
@@ -565,9 +596,9 @@ def main_legacy():
 
                 # ── Group selection (fast, no timeout needed) ──
                 selector_messages, context_parts = build_selector_messages(subtask, all_results)
-                print(f"  [Tool Selector] ({get_model('tool_selector')})")
+                print(f"  [Tool Group Chooser] ({get_model('tool_group_chooser')})")
                 _, selector_content, _ = query_ollama(
-                    get_model('tool_selector'), selector_messages, think=False
+                    get_model('tool_group_chooser'), selector_messages, think=False
                 )
 
                 chosen_group = pick_group(selector_content)
@@ -586,6 +617,7 @@ def main_legacy():
 
                 # ── Tool execution (timeout-wrapped) ──
                 timeout = download_timeout if chosen_group in slow_groups else default_timeout
+                print(f"  [Tool User] ({get_model('tool_user')})")
 
                 def run_tool_calls(_subtask=subtask, _context_parts=context_parts, _group_tools=group_tools, _chosen_group=chosen_group):
                     tool_messages = [
@@ -593,7 +625,7 @@ def main_legacy():
                         {'role': 'user', 'content': "\n".join(_context_parts)}
                     ]
                     _, _, tool_calls = query_ollama(
-                        get_model('tool_selector'), tool_messages,
+                        get_model('tool_user'), tool_messages,
                         tools=_group_tools, think=False
                     )
                     if not tool_calls:

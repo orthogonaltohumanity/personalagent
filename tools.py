@@ -248,9 +248,28 @@ def _chunk_text(text, size=500, overlap=50):
 # ── Web / research ───────────────────────────────────────────────────────────
 
 def search_web(text: str):
-    '''Searches the web via DuckDuckGo and returns up to 5 results'''
+    '''Searches the web via DuckDuckGo, saves results to a file, and returns both the file path and results.'''
     from ddgs import DDGS
-    return DDGS().text(text, max_results=cfg['max_web_search_results'])
+    results = list(DDGS().text(text, max_results=cfg['max_web_search_results']))
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_name = f"websearch_{timestamp}.json"
+    output_path = _work_path(output_name)
+    _ensure_parent_dir(output_path)
+
+    payload = {
+        'query': text,
+        'timestamp': datetime.now().isoformat(),
+        'results': results,
+    }
+    with open(output_path, 'w') as f:
+        json.dump(payload, f, indent=2)
+
+    return {
+        'saved_to': output_path,
+        'result_count': len(results),
+        'results': results,
+    }
 
 
 _SUPPORTED_FILETYPES = {
