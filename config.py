@@ -1,10 +1,22 @@
+from pathlib import Path
+
 import yaml
 from ollama import generate as ollama_generate
 
 # ── Load config ──────────────────────────────────────────────────────────────
 
-with open('config.yaml', 'r') as f:
+BASE_DIR = Path(__file__).resolve().parent
+
+with open(BASE_DIR / 'config.yaml', 'r') as f:
     cfg = yaml.safe_load(f)
+
+
+def resolve_path(path_value: str):
+    """Resolve a config path relative to repo root when not absolute."""
+    p = Path(path_value).expanduser()
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    return p
 
 _molt_client = None
 
