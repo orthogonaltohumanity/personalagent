@@ -4,8 +4,11 @@ models:
   planner:
     model: "qwen3.5:9b"
     think: true
-  tool_selector:
-    model: "ministral-3:3b"
+  tool_group_chooser:
+    model: "qwen3:0.6b"
+    think: false
+  tool_user:
+    model: "qwen3:0.6"
     think: false
   verifier:
     model: "qwen3:4b"
