@@ -74,7 +74,7 @@ def parse_subtasks(text):
     """Parse planner output into a clean subtask list.
 
     Accepts JSON (`{"subtasks": [...]}` or list), numbered/bulleted text,
-    and strict bracket-tag lines like `[web_search] ...`.
+    and strict bracket-tag lines like `[gather_online_information] ...`.
     """
     if not text:
         return []
@@ -132,7 +132,7 @@ def pick_group(selector_content):
     if fence_match:
         raw = fence_match.group(1).strip()
 
-    # JSON fallback: {"group": "web_search"}
+    # JSON fallback: {"group": "gather_online_information"}
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, dict):
@@ -309,7 +309,7 @@ def build_planner_messages(system_prompt, planning_input):
         f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
         f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
         f"RULES:\n"
-        f"- REQUIRED FORMAT: every subtask must start with a bracketed tool group tag followed by an action, e.g., '[web_search] Find ...'.\n"
+        f"- REQUIRED FORMAT: every subtask must start with a bracketed tool group tag followed by an action, e.g., '[gather_online_information] Find ...'.\n"
         f"- Use exact group tags from the list below; do not invent new group names.\n"
         f"- Use memory tools distinctly: search_memory/open_memory to retrieve, save_memory to add new facts, edit_memory to correct existing facts.\n"
         f"- For writing subtasks, specify intent clearly: write_text for net-new writing, write_text_from_source when based on a file, edit_text for revising an existing file.\n"
@@ -502,7 +502,7 @@ def main_tui():
                 failure_reason = ""
                 default_timeout = cfg.get('subtask_timeout_seconds', 300)
                 download_timeout = cfg.get('download_subtask_timeout_seconds', 900)
-                slow_groups = {'web_search', 'document_processing', 'text_generation'}
+                slow_groups = {'gather_online_information', 'document_processing', 'text_generation'}
 
                 for i, subtask in enumerate(subtasks):
                     state.increment_iteration()
@@ -538,8 +538,8 @@ def main_tui():
                             chosen_group = planner_group
                             tui.state.add_log(f"Chooser unparsable; using planner tag: {chosen_group}")
                         else:
-                            tui.state.add_log(f"Could not determine group, defaulting to web_search")
-                            chosen_group = 'web_search'
+                            tui.state.add_log(f"Could not determine group, defaulting to gather_online_information")
+                            chosen_group = 'gather_online_information'
 
                     tui.set_subtask_group(i, chosen_group)
                     tui.state.add_log(f"Group: {chosen_group}")
@@ -733,7 +733,7 @@ def main_legacy():
             failure_reason = ""
             default_timeout = cfg.get('subtask_timeout_seconds', 300)
             download_timeout = cfg.get('download_subtask_timeout_seconds', 900)
-            slow_groups = {'web_search', 'document_processing', 'text_generation'}
+            slow_groups = {'gather_online_information', 'document_processing', 'text_generation'}
 
             for i, subtask in enumerate(subtasks):
                 state.increment_iteration()
@@ -768,8 +768,8 @@ def main_legacy():
                         chosen_group = planner_group
                         print(f"  Chooser unparsable; using planner tag: {chosen_group}")
                     else:
-                        print(f"  Could not determine group, defaulting to web_search")
-                        chosen_group = 'web_search'
+                        print(f"  Could not determine group, defaulting to gather_online_information")
+                        chosen_group = 'gather_online_information'
                 print(f"  Selected group: {chosen_group}")
 
                 group_tools = get_tools_in_group(chosen_group)

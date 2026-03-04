@@ -32,7 +32,7 @@ def _get_chat_model():
 def _allowed_tools():
     """Tools for conversational assistant with memory + research/document access."""
     selected = []
-    for group in ('web_search', 'memory', 'document_processing', 'file_operations'):
+    for group in ('gather_online_information', 'memory', 'document_processing', 'file_operations'):
         selected.extend(get_tools_in_group(group))
     return selected
 

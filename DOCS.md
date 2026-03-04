@@ -37,7 +37,7 @@ system_prompt.md     The agent's system prompt / prime directive
 memories.json        Persistent key-value memory store
 pdf_index.json       Vector index for ingested documents
 Playground/          Working directory for agent-generated files
-downloads/           Downloaded PDFs and CSVs
+downloads/           Downloaded PDFs, CSVs, HTML, TXT/MD, and JSON files
 ```
 
 ### Three Models, Three Roles
@@ -74,7 +74,7 @@ while True:
        a. build_selector_messages() provides subtask + previous results + group list
        b. Tool group chooser (non-streaming, no thinking) picks a group name
        c. pick_group() extracts group name from chooser output (first line match, then full scan)
-       d. If no group found → defaults to web_search
+       d. If no group found → defaults to gather_online_information
        e. Second query to tool user with chosen group's tool schemas → generates tool calls
        f. execute_tool_calls() runs each call, records results
        g. Results accumulate — later subtasks see earlier results for context
@@ -84,7 +84,7 @@ while True:
          execution stops immediately — remaining subtasks are skipped
        - Failure context (what failed + results so far) is fed back to the planner
        - Verification is skipped — goes straight to re-planning
-       - Per-subtask timeout: 5 min default, 15 min for web_search/document_processing groups
+       - Per-subtask timeout: 5 min default, 15 min for gather_online_information/document_processing groups
 
     3. VERIFY PHASE
        - build_verifier_messages() provides system prompt + original task + all results
@@ -108,9 +108,9 @@ Tools are organized into 8 groups. The tool group chooser picks ONE group per su
 
 | Group | Description | Tools |
 |-------|-------------|-------|
-| web_search | Search the web and download files | search_web, check_connectivity, search_and_download_files |
-| social_media | Moltbook social media platform | 16 tools (posts, file-to-post, comments, votes, profiles, communities) |
-| document_processing | PDFs and CSVs | ingest_pdf, ingest_csv, query_documents, list_downloaded_files |
+| gather_online_information | Search web, download files, and run social media search | search_web, check_connectivity, search_and_download_files, social_media_search |
+| social_media | Moltbook social media platform (posting, profiles, communities) | 15 tools (posts, file-to-post, comments, votes, profiles, communities) |
+| document_processing | PDFs, CSVs, HTML, text, JSON | ingest_pdf, ingest_csv, ingest_html, ingest_text, ingest_json, query_documents, list_downloaded_files |
 | file_operations | Read/write files | read_file, edit, list_working_files |
 | code_generation | AI code models | generate_code, generate_code_edit |
 | text_generation | Generate or edit written text | write_text, edit_text, write_text_from_source |
@@ -174,7 +174,7 @@ max_verification_loops: 12     # max re-plans before asking user
 ollama_context_window: 32768
 max_tool_calls_per_step: 10
 subtask_timeout_seconds: 300           # 5-min default per-subtask timeout
-download_subtask_timeout_seconds: 900  # 15-min timeout for web_search, document_processing, write/edit_text
+download_subtask_timeout_seconds: 900  # 15-min timeout for gather_online_information, document_processing, write/edit_text
 max_web_search_results: 5
 max_download_search_results: 10
 download_timeout_seconds: 15
@@ -270,7 +270,7 @@ The planner can suggest memory-focused subtasks (e.g. "search memory for identit
 ### Ingestion
 
 ```
-PDF/CSV → extract text → adaptive chunking → embed each chunk → store in pdf_index.json
+PDF/CSV/HTML/TXT/JSON → extract text → adaptive chunking → embed each chunk → store in pdf_index.json
 ```
 
 Chunk sizes adapt to document length:
@@ -288,7 +288,7 @@ Chunk sizes adapt to document length:
 
 ### Auto-download
 
-`search_and_download_files(query, filetype)` searches DuckDuckGo, downloads matching files, and auto-ingests them.
+`search_and_download_files(query, filetype)` searches DuckDuckGo, downloads matching files (`pdf`, `csv`, `html`, `txt`, `json`), and auto-ingests them.
 
 ---
 
@@ -346,7 +346,7 @@ The agent runs in a fullscreen Rich terminal UI by default. The TUI shows all th
 │    3. Summarize              ├────────────────────────────┤
 │ (scrolls to current)        │ Log                          │
 │                              │ 14:32:01 Planning started   │
-│                              │ 14:32:15 Group: web_search  │
+│                              │ 14:32:15 Group: gather_online_information  │
 ├──────────────────────────────┴───────────────────────────┤
 │ Task> type here_                                          │
 └──────────────────────────────────────────────────────────┘
