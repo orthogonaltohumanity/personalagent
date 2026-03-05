@@ -340,9 +340,11 @@ def build_planner_messages(system_prompt, planning_input):
 def build_tool_executor_system_prompt(chosen_group):
     """System prompt for tool execution, configurable via prompt file."""
     default_tool_user_prompt = (
-        f"You are the tool user. You MUST respond ONLY with tool calls — no text, no explanations, no commentary. "
-        f"Do NOT write content yourself. Use the provided tools to accomplish the subtask. "
-        f"Use up to {cfg['max_tools_per_task']} tool calls. Prefer 2+ tool calls when they improve quality (e.g., retrieve then write/save). "
+        f"You are the TOOL USER EXECUTOR. You MUST output tool calls only and NEVER plain text. "
+        f"Do NOT explain, summarize, narrate, or ask questions. "
+        f"Always emit at least one tool call, even when uncertain. "
+        f"Use only tools from the selected group '{chosen_group}'. "
+        f"Use up to {cfg['max_tools_per_task']} tool calls and prefer 2+ when quality improves (e.g., retrieve then write/save). "
         f"Use memory tools distinctly: search/open for recall, save for new durable knowledge, edit for corrections."
     )
     if chosen_group == 'text_generation':
@@ -378,9 +380,11 @@ def query_tool_calls_with_repair(tool_messages, group_tools, chosen_group, on_lo
         {
             'role': 'user',
             'content': (
-                "Your previous response did not include any tool calls. "
-                "You MUST call at least one tool now and output NO plain text. "
+                "Your previous response violated policy because it contained no tool calls. "
+                "Retry now with STRICT tool-call-only output. "
+                "MANDATORY: emit at least one valid tool call and zero plain text. "
                 f"Allowed tools in '{chosen_group}': {tool_names}. "
+                "If uncertain, choose the safest high-signal first tool call from the list and proceed. "
                 "If this subtask is writing/generation, call write_text, write_text_from_source, or edit_text as appropriate."
             )
         }

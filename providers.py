@@ -72,8 +72,8 @@ def stream_ollama(model, messages, tools=None, think=True, on_chunk=None):
     Returns (thinking, content, tool_calls).
 
     Retries on Ollama errors (e.g. JSON parse failures from malformed tool
-    calls). On first failure with tools, retries without tools so the model
-    can still produce a text response.
+    calls). Tool schemas are preserved across retries so tool-calling behavior
+    remains available on every attempt.
 
     on_chunk: optional callback(chunk_type, text)
         chunk_type is 'thinking_start', 'thinking', 'answer_start', 'content'
@@ -127,9 +127,7 @@ def stream_ollama(model, messages, tools=None, think=True, on_chunk=None):
 
         except Exception as e:
             if attempt < MAX_RETRIES:
-                _warn(f"Ollama error: {e} — retrying without tools (attempt {attempt + 1})", on_chunk)
-                # Drop tools on retry — model can still produce text
-                tool_schemas = None
+                _warn(f"Ollama error: {e} — retrying with same tool configuration (attempt {attempt + 1})", on_chunk)
             else:
                 _warn(f"Ollama error after {MAX_RETRIES + 1} attempts: {e}", on_chunk)
                 return '', '', []
@@ -142,7 +140,7 @@ def query_ollama(model, messages, tools=None, think=False):
     Non-streaming Ollama query. Used for tool_group_chooser and tool_user.
     Returns (thinking, content, tool_calls).
 
-    Retries on failure. On first failure with tools, retries without tools.
+    Retries on failure while preserving tool schemas across attempts.
     """
     tool_schemas = build_tool_schemas(tools) if tools else None
 
@@ -163,9 +161,8 @@ def query_ollama(model, messages, tools=None, think=False):
 
         except Exception as e:
             if attempt < MAX_RETRIES:
-                print(f"[WARNING: Ollama error: {e} — retrying without tools (attempt {attempt + 1})]",
+                print(f"[WARNING: Ollama error: {e} — retrying with same tool configuration (attempt {attempt + 1})]",
                       file=sys.stderr)
-                tool_schemas = None
             else:
                 print(f"[WARNING: Ollama error after {MAX_RETRIES + 1} attempts: {e}]",
                       file=sys.stderr)
