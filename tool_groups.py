@@ -27,7 +27,7 @@ TOOL_GROUPS = {
         "tools": ["ingest_pdf", "ingest_csv", "ingest_html", "ingest_text", "ingest_json", "query_documents", "list_downloaded_files"]
     },
     "file_operations": {
-        "description": "Read and write files in the working directory",
+        "description": "Low-level file IO (read/list/line edits). Do NOT use for drafting new prose; use text_generation for writing content.",
         "tools": ["read_file", "edit", "list_working_files"]
     },
     "code_generation": {

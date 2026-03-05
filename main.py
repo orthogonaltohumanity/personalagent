@@ -306,7 +306,7 @@ def build_planner_messages(system_prompt, planning_input):
     group_summary = get_group_summary(include_tools=False)
     memory_context = get_planner_memory_context()
     default_planner_prompt = (
-        f"You are the PLANNER. You produce ONLY a numbered subtask list — nothing else.\n"
+        f"You are the PLANNER. You produce ONLY a subtask list — nothing else.\n"
         f"You do NOT call tools, write code, or perform tasks. A separate TOOL GROUP CHOOSER + TOOL USER pair executes your plan.\n\n"
         f"RULES:\n"
         f"- REQUIRED FORMAT: every subtask must start with a bracketed tool group tag followed by an action, e.g., '[gather_online_information] Find ...'.\n"
@@ -316,6 +316,7 @@ def build_planner_messages(system_prompt, planning_input):
         f"- Each subtask = one tool group. Be specific about what the executor should do.\n"
         f"- Prefer subtasks that naturally require multiple tool calls when evidence gathering + action are both needed.\n"
         f"- If re-planning after a failure, use a diverse strategy rather than repeating the same approach.\n"
+        f"- When a failure cause or successful workaround is discovered, add a memory subtask (save_memory) to store that lesson durably.\n"
         f"- Max {cfg['max_subtasks']} subtasks. 2-5 per phase — the re-plan loop handles the rest.\n\n"
         f"{group_summary}"
     )
@@ -361,6 +362,33 @@ def build_tool_executor_system_prompt(chosen_group):
     })
 
 
+def query_tool_calls_with_repair(tool_messages, group_tools, chosen_group, on_log=None):
+    """Run tool-user query and retry once if the model returns plain text instead of tool calls."""
+    model = get_model('tool_user')
+    _, content, tool_calls = query_ollama(model, tool_messages, tools=group_tools, think=False)
+    if tool_calls:
+        return tool_calls
+
+    tool_names = ", ".join(fn.__name__ for fn in group_tools) if group_tools else "(none)"
+    if on_log:
+        preview = (content or "").strip().replace('\n', ' ')[:200]
+        on_log(f"No tool calls from tool_user; retrying with strict repair prompt. Raw content: {preview}")
+
+    repair_messages = tool_messages + [
+        {
+            'role': 'user',
+            'content': (
+                "Your previous response did not include any tool calls. "
+                "You MUST call at least one tool now and output NO plain text. "
+                f"Allowed tools in '{chosen_group}': {tool_names}. "
+                "If this subtask is writing/generation, call write_text, write_text_from_source, or edit_text as appropriate."
+            )
+        }
+    ]
+    _, _, repaired_calls = query_ollama(model, repair_messages, tools=group_tools, think=False)
+    return repaired_calls
+
+
 def build_selector_messages(subtask, all_results):
     context_parts = [f"Current subtask: {subtask}"]
     recommended_group = None
@@ -388,6 +416,8 @@ def build_selector_messages(subtask, all_results):
         f"Available groups:\n{group_list}\n\n"
         f"Selection rules:\n"
         f"- Choose text_generation for writing/editing tasks.\n"
+        f"- If the user asks to draft/generate/rewrite prose, choose text_generation even when file output is requested.\n"
+        f"- Use file_operations only for direct file IO tasks (read/list/targeted line edits), not content creation.\n"
         f"- Distinguish writing tools: write_text (net-new), write_text_from_source (source-based), edit_text (revise existing).\n"
         f"- Distinguish memory tools: search/open for retrieval, save for new durable information, edit for corrections.\n"
         f"- Prefer multiple tool calls when helpful (e.g., find/read context, then write, then save key results to memory).\n\n"
@@ -563,9 +593,9 @@ def main_tui():
                             {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                             {'role': 'user', 'content': "\n".join(_context_parts)}
                         ]
-                        _, _, tool_calls = query_ollama(
-                            get_model('tool_user'), tool_messages,
-                            tools=_group_tools, think=False
+                        tool_calls = query_tool_calls_with_repair(
+                            tool_messages, _group_tools, _chosen_group,
+                            on_log=(lambda msg: tui.state.add_log(msg))
                         )
                         if not tool_calls:
                             return 'no_calls', []
@@ -789,9 +819,9 @@ def main_legacy():
                         {'role': 'system', 'content': build_tool_executor_system_prompt(_chosen_group)},
                         {'role': 'user', 'content': "\n".join(_context_parts)}
                     ]
-                    _, _, tool_calls = query_ollama(
-                        get_model('tool_user'), tool_messages,
-                        tools=_group_tools, think=False
+                    tool_calls = query_tool_calls_with_repair(
+                        tool_messages, _group_tools, _chosen_group,
+                        on_log=(lambda msg: print(f"  {msg}"))
                     )
                     if not tool_calls:
                         return 'no_calls', []
