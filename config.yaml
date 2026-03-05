@@ -5,7 +5,7 @@ models:
     model: "qwen3.5:9b"
     think: true
   tool_group_chooser:
-    model: "qwen3:1.7b"
+    model: "ministral-3:3b"
     think: false
   tool_user:
     model: "ministral-3:3b"
