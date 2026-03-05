@@ -851,16 +851,67 @@ def edit_text(filename: str, prompt: str):
 
 
 def write_text_from_source(filename: str, source_filename: str, prompt: str):
-    '''Reads a source file as reference material and generates NEW text in a separate output file. Essential for multi-stage writing pipelines: outline → draft → polished work. Use this to build upon existing text — e.g. turn an outline into a full draft, expand notes into an article, transform bullet points into prose, or write a response based on source material. The source file is NOT modified.'''
-    source_path = _work_path(source_filename)
-    try:
-        with open(source_path, 'r') as f:
-            source_content = f.read()
-    except FileNotFoundError:
-        return f"Error: Source file '{source_filename}' not found in {state.working_directory}"
+    """Reads one or more source files as reference material and generates NEW text in a separate output file. Essential for multi-stage writing pipelines: outline → draft → polished work. Use this to build upon existing text — e.g. turn an outline into a full draft, expand notes into an article, transform bullet points into prose, or write a response based on source material. The source files are NOT modified.
 
-    if not source_content.strip():
-        return f"Error: Source file '{source_filename}' is empty"
+    The source_filename argument supports:
+    - a single filename: "notes.txt"
+    - comma/newline/semicolon-separated filenames: "a.txt, b.txt" or "a.txt\nb.txt"
+    - a JSON array string: '["a.txt", "b.txt"]'
+    """
+
+    def _parse_source_filenames(value: str):
+        raw = (value or "").strip()
+        if not raw:
+            return []
+
+        if raw.startswith('[') and raw.endswith(']'):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(v).strip() for v in parsed if str(v).strip()]
+            except Exception:
+                pass
+
+        parts = re.split(r'[\n,;]+', raw)
+        return [part.strip() for part in parts if part.strip()]
+
+    source_filenames = _parse_source_filenames(source_filename)
+    if not source_filenames:
+        return "Error: source_filename is empty. Provide one filename or multiple filenames separated by commas/newlines/semicolons (or JSON array)."
+
+    # Preserve input order while removing duplicates
+    seen = set()
+    ordered_sources = []
+    for src in source_filenames:
+        if src not in seen:
+            ordered_sources.append(src)
+            seen.add(src)
+
+    source_blocks = []
+    missing_sources = []
+    empty_sources = []
+    for src in ordered_sources:
+        source_path = _work_path(src)
+        try:
+            with open(source_path, 'r') as f:
+                content = f.read()
+        except FileNotFoundError:
+            missing_sources.append(src)
+            continue
+
+        if not content.strip():
+            empty_sources.append(src)
+            continue
+
+        source_blocks.append((src, content))
+
+    if missing_sources:
+        return f"Error: Source file(s) not found in {state.working_directory}: {', '.join(missing_sources)}"
+
+    if not source_blocks:
+        if empty_sources:
+            return f"Error: All provided source files are empty: {', '.join(empty_sources)}"
+        return "Error: No usable source content found"
 
     model = get_model('planner')
 
@@ -874,6 +925,11 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
     # Load system prompt
     system_prompt = _load_system_prompt_text()
 
+    combined_source = "\n\n".join(
+        [f"Source material ({src}):\n\n---\n{content}\n---" for src, content in source_blocks]
+    )
+    source_list = ", ".join([src for src, _ in source_blocks])
+
     messages = [
         {'role': 'system', 'content': (
             f"{system_prompt}\n\n"
@@ -882,7 +938,7 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
             f"{memory_context}"
         )},
         {'role': 'user', 'content': (
-            f"Source material (from {source_filename}):\n\n---\n{source_content}\n---\n\n"
+            f"{combined_source}\n\n"
             f"Instructions: {prompt}"
         )}
     ]
@@ -893,7 +949,7 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
 
     def run():
         try:
-            result_box[0] = _stream_chat(model, messages, label=f"Writing {filename} from {source_filename}")
+            result_box[0] = _stream_chat(model, messages, label=f"Writing {filename} from {len(source_blocks)} source file(s)")
         except Exception as e:
             error_box[0] = e
 
@@ -914,8 +970,7 @@ def write_text_from_source(filename: str, source_filename: str, prompt: str):
     _ensure_parent_dir(filepath)
     with open(filepath, 'w') as f:
         f.write(text)
-    return f"Generated with {model} (memory-aware, source: {source_filename}) and saved to {filepath} ({len(text)} chars)"
-
+    return f"Generated with {model} (memory-aware, sources: {source_list}) and saved to {filepath} ({len(text)} chars)"
 
 def generate_code(filename: str, prompt: str):
     '''Generates code using the configured code model and saves it to a file in the working directory. Does NOT execute the code.'''

@@ -45,7 +45,7 @@ downloads/           Downloaded PDFs, CSVs, HTML, TXT/MD, and JSON files
 | Role | Default Model | Think | Purpose |
 |------|---------------|-------|---------|
 | planner | qwen3.5:9b | yes | Text-only — no tool calls. Outputs numbered subtask list with suggested tool groups. |
-| tool_group_chooser | qwen3:1.7b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
+| tool_group_chooser | ministral-3:3b | no | Picks a tool group for each subtask based on planner subtask text and suggested group. |
 | tool_user | ministral-3:3b | no | Calls up to 3 tools from the chosen group for each subtask. |
 | verifier | qwen3:4b | yes | Reviews original task + all results, responds COMPLETE or INCOMPLETE |
 
@@ -93,6 +93,31 @@ while True:
        - Otherwise: INCOMPLETE → remaining work extracted → fed back as new planning_input
        - After max_verification_loops: asks user to continue, stop, or provide new instructions
 ```
+
+### Failure + Retry Pipeline (End-to-End)
+
+Retries and recovery are handled at multiple layers:
+
+1. **Provider-level retries (LLM call reliability)**
+   - `stream_ollama()` and `query_ollama()` retry failed model calls.
+   - On retry, the system can apply safe fallbacks (for example dropping tools on one retry path) to still recover usable output.
+
+2. **Execution-level failure cutoffs (subtask reliability)**
+   - A subtask is marked failed when tool calls error, produce no calls when needed, pick invalid/no tools, or hit timeout.
+   - On failure, remaining subtasks in that plan are skipped immediately.
+
+3. **Planner-level retries (task completion reliability)**
+   - Failure context is converted into a **sanitized retry prompt** (high-level failure details + successful prior results).
+   - Raw tool error payloads are intentionally not echoed back into planner context.
+   - The planner produces a revised subtask plan and execution restarts.
+
+4. **Verifier-driven retries (quality/completeness reliability)**
+   - If verifier says `INCOMPLETE`, remaining work is replanned and retried as a new loop.
+   - If verifier says `COMPLETE`, task exits successfully.
+
+5. **Global retry boundary**
+   - `max_verification_loops` limits repeated replan cycles.
+   - At that limit, user input decides whether to continue, stop, or redirect work.
 
 ### Planner Isolation
 
@@ -142,6 +167,22 @@ TOOL_GROUPS["my_group"] = {
 }
 ```
 
+### Manual Code Editing Guide
+
+If you want to edit the project directly:
+
+1. Update only the file(s) relevant to your goal.
+2. Re-run the app in legacy mode (`python main.py --no-tui`) for quick validation.
+3. Inspect your delta with `git diff`.
+4. Commit in small units with clear messages.
+
+Common edit targets:
+- Prompt behavior: `system_prompt.md`, `prompts/*.md`
+- Runtime/model settings: `config.yaml`
+- Core orchestration: `main.py`
+- Tool implementations: `tools.py`
+- Tool grouping/selection surface: `tool_groups.py`
+
 ---
 
 ## Configuration
@@ -154,7 +195,7 @@ models:
     model: "qwen3.5:9b"
     think: true              # chain-of-thought mode (model must support it)
   tool_group_chooser:
-    model: "qwen3:1.7b"
+    model: "ministral-3:3b"
     think: false
   tool_user:
     model: "ministral-3:3b"
@@ -298,7 +339,7 @@ Chunk sizes adapt to document length:
 
 - `write_text(filename, prompt)` — generates written text (articles, posts, essays, docs, creative writing) using the planner model with memory context, saves to working directory
 - `edit_text(filename, prompt)` — reads an existing text file, sends it with editing instructions to the planner model with memory context, overwrites the file
-- `write_text_from_source(filename, source_filename, prompt)` — reads a source file as reference and generates new text in a separate output file. Designed for multi-stage writing pipelines (e.g. outline → draft → polished work). The source file is not modified.
+- `write_text_from_source(filename, source_filename, prompt)` — reads one or more source files as reference and generates new text in a separate output file. `source_filename` can be a single file, comma/newline/semicolon-separated filenames, or a JSON array string. Designed for multi-stage writing pipelines (e.g. outline → draft → polished work). Source files are not modified.
 - `post_file_to_social_media(community, title, filename)` — reads a file from the working directory and posts its contents to a Moltbook community
 
 All three writing tools (`write_text`, `edit_text`, `write_text_from_source`) have a 15-minute timeout (configurable via `download_subtask_timeout_seconds`).
